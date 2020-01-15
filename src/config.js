@@ -4,6 +4,5 @@ require('dotenv').config({
 const env = require('require-env')
 module.exports = {
   hostname: env.require('HOST'),
-  port: env.require('PORT'),
-  connectionString: process.env.CONNECTION_STRING || 'localhost'
+  port: env.require('PORT')
 }
