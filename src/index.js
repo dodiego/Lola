@@ -1,16 +1,47 @@
 const config = require('./config')
 const bcrypt = require('bcrypt')
 const qs = require('qs')
+const { RBAC } = require('fast-rbac')
 const fastify = require('fastify')({
   querystringParser: str => qs.parse(str),
   logger: true
 })
 const Konekto = require('konekto')
 const konekto = new Konekto()
-
+const rbac = new RBAC({
+  roles: {
+    users: {
+      can: [
+        {
+          name: '*',
+          operation: 'save',
+          when: ctx => {
+            if (ctx.user._id === ctx.node._id) {
+              return true
+            }
+            if (ctx.node.user_id === ctx.user.id) {
+              return true
+            }
+            return ctx.user.is_admin
+          }
+        },
+        {
+          name: '*',
+          operation: 'delete',
+          when: ctx => ctx.user.id === ctx.node.user_id
+        },
+        {
+          name: '*',
+          operation: 'read',
+          when: ctx => !ctx.node.deleted
+        }
+      ]
+    }
+  }
+})
 async function getToken (res, _id) {
   try {
-    const token = await res.jwtSign({ _id }, config.tokenConfig)
+    const token = await fastify.jwt.sign({ _id }, config.tokenConfig)
     return { token }
   } catch (error) {
     res.internalServerError("couldn't login, please try again")
@@ -22,13 +53,29 @@ fastify.register(require('fastify-jwt'), {
   secret: config.secret
 })
 
-fastify.decorate('authenticate', async function (request, reply) {
-  try {
-    await request.jwtVerify()
-  } catch (err) {
-    reply.send(err)
+fastify.decorate(
+  'authenticate',
+  /**
+   *
+   * @param {import('fastify').FastifyRequest} request
+   * @param {import('fastify').FastifyReply} reply
+   */
+  async function (request, reply) {
+    try {
+      const user = await request.jwtVerify()
+      const userDb = await konekto.findOneByQueryObject({
+        _label: 'users',
+        _where: { filter: '{this}._id = :id', params: { id: user._id } }
+      })
+      if (!userDb) {
+        throw new Error("User does't exist")
+      }
+    } catch (err) {
+      fastify.log.error(err)
+      reply.unauthorized()
+    }
   }
-})
+)
 
 fastify.post(
   '/signup',
@@ -48,7 +95,7 @@ fastify.post(
   async (req, res) => {
     const saltRounds = 10
     req.body.password = await bcrypt.hash(req.body.password, saltRounds)
-    req.body._label = 'sigma_user'
+    req.body._label = 'users'
     const id = await konekto.save(req.body)
     return getToken(res, id)
   }
@@ -70,7 +117,7 @@ fastify.post(
   },
   async (req, res) => {
     const user = await konekto.findOneByQueryObject({
-      _label: 'sigma_user',
+      _label: 'users',
       _where: {
         filter: '{this}.email = :email',
         params: {
@@ -90,29 +137,73 @@ fastify.post(
 )
 
 fastify.post('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
-  return konekto.save(req.body)
+  try {
+    return konekto.save(req.body, {
+      hooks: {
+        beforeSave: node => {
+          if (!rbac.can('users', node._label, 'save', { user: req.user, node })) {
+            return false
+          }
+          if (node._id !== req.user._id) {
+            node.user_id = req.user._id
+          }
+          return true
+        }
+      }
+    })
+  } catch (error) {
+    fastify.log.error(error)
+    res.forbidden('You cannot perform this action')
+  }
 })
 
 fastify.get('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
-  return konekto.findByQueryObject(req.query, {
-    hooks: {
-      beforeParseNode (node) {
-        if (node._where) {
-          node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
-        } else {
-          node._where = { filter: '{this}.deleted IS NULL' }
+  try {
+    return konekto.findByQueryObject(req.query, {
+      hooks: {
+        beforeParseNode (node) {
+          if (node._where) {
+            node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
+          } else {
+            node._where = { filter: '{this}.deleted IS NULL' }
+          }
+        },
+        beforeRead: node => {
+          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+            return false
+          }
+          if (node._label === 'users') {
+            delete node.password
+          }
+          return true
         }
       }
-    }
-  })
+    })
+  } catch (error) {
+    fastify.log.error(error)
+    res.internalServerError('Plase try again')
+  }
 })
 
 fastify.get('/api/id/:id', { preValidation: [fastify.authenticate] }, (req, res) => {
-  return konekto.findById(req.params.id, {
-    hooks: {
-      beforeRead: node => !node.deleted
-    }
-  })
+  try {
+    return konekto.findById(req.params.id, {
+      hooks: {
+        beforeRead: node => {
+          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+            return false
+          }
+          if (node._label === 'users') {
+            delete node.password
+          }
+          return true
+        }
+      }
+    })
+  } catch (error) {
+    fastify.log.error(error)
+    res.internalServerError('Plase try again')
+  }
 })
 
 fastify.delete('/api', { preValidation: [fastify.authenticate] }, async (req, res) => {
@@ -120,6 +211,9 @@ fastify.delete('/api', { preValidation: [fastify.authenticate] }, async (req, re
   await konekto.save(result, {
     hooks: {
       beforeSave (node) {
+        if (!rbac.can('users', node._label, 'delete', { user: req.user, node })) {
+          return false
+        }
         node.deleted = true
         return true
       }
@@ -136,8 +230,17 @@ fastify.delete('/api/id/:id', { preValidation: [fastify.authenticate] }, async (
       }
     }
   })
-  result.deleted = true
-  return konekto.save(result)
+  return konekto.save(result, {
+    hooks: {
+      beforeSave (node) {
+        if (!rbac.can('users', node._label, 'delete', { user: req.user, node })) {
+          return false
+        }
+        node.deleted = true
+        return true
+      }
+    }
+  })
 })
 
 fastify.delete('/api/relationships', { preValidation: [fastify.authenticate] }, (req, res) => {
@@ -146,14 +249,14 @@ fastify.delete('/api/relationships', { preValidation: [fastify.authenticate] }, 
 
 async function run () {
   await konekto.connect()
-  await konekto.createGraph('sigma')
-  await konekto.setGraph('sigma')
+  await konekto.createGraph('like_u')
+  await konekto.setGraph('like_u')
   await konekto.createSchema({
-    _label: 'sigma_user',
+    _label: 'users',
     interests: {
-      _label: 'interest',
+      _label: 'user_interests',
       category: {
-        _label: 'category'
+        _label: 'interest_categories'
       }
     }
   })

@@ -6,5 +6,5 @@ module.exports = {
   hostname: env.require('HOST'),
   port: env.require('PORT'),
   secret: env.require('SECRET'),
-  tokenConfig: { expiresIn: '5m' }
+  tokenConfig: process.env.NODE_ENV === 'production' ? { expiresIn: '5m' } : {}
 }
