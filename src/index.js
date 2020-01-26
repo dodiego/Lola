@@ -8,34 +8,7 @@ const fastify = require('fastify')({
 })
 const Konekto = require('konekto')
 const konekto = new Konekto()
-const rbac = new RBAC({
-  roles: {
-    users: {
-      can: [
-        {
-          name: '*',
-          operation: 'create',
-          when: ctx => ctx.node._label !== 'users'
-        },
-        {
-          name: '*',
-          operation: 'update',
-          when: ctx => ctx.user._id === ctx.node._id || ctx.node.user_id === ctx.user._id
-        },
-        {
-          name: '*',
-          operation: 'delete',
-          when: ctx => ctx.user._id === ctx.node.user_id
-        },
-        {
-          name: '*',
-          operation: 'read',
-          when: ctx => !ctx.node.deleted
-        }
-      ]
-    }
-  }
-})
+const rbac = new RBAC(require('./rbac'))
 async function getToken (res, _id) {
   try {
     const token = await fastify.jwt.sign({ _id }, config.tokenConfig)
@@ -273,15 +246,7 @@ async function run () {
   await konekto.connect()
   await konekto.createGraph('like_u')
   await konekto.setGraph('like_u')
-  await konekto.createSchema({
-    _label: 'users',
-    interests: {
-      _label: 'user_interests',
-      category: {
-        _label: 'interest_categories'
-      }
-    }
-  })
+  await konekto.createSchema(require('./schema'))
   await fastify.listen(config.port, config.hostname)
 }
 
