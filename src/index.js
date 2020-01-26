@@ -244,8 +244,8 @@ fastify.delete('/api/relationships', { preValidation: [fastify.authenticate] }, 
 
 async function run () {
   await konekto.connect()
-  await konekto.createGraph('like_u')
-  await konekto.setGraph('like_u')
+  await konekto.createGraph('sigma')
+  await konekto.setGraph('sigma')
   await konekto.createSchema(require('./schema'))
   await fastify.listen(config.port, config.hostname)
 }
