@@ -14,16 +14,13 @@ const rbac = new RBAC({
       can: [
         {
           name: '*',
-          operation: 'save',
-          when: ctx => {
-            if (ctx.user._id === ctx.node._id) {
-              return true
-            }
-            if (ctx.node.user_id === ctx.user.id) {
-              return true
-            }
-            return ctx.user.is_admin
-          }
+          operation: 'create',
+          when: ctx => ctx.node._label !== 'users'
+        },
+        {
+          name: '*',
+          operation: 'update',
+          when: ctx => ctx.user._id === ctx.node._id || ctx.node.user_id === ctx.user._id
         },
         {
           name: '*',
@@ -136,12 +133,34 @@ fastify.post(
   }
 )
 
+fastify.get('/me', { preValidation: [fastify.authenticate] }, (req, res) => {
+  return konekto.findById(req.user._id, {
+    hooks: {
+      beforeRead: node => {
+        if (node._label === 'users') {
+          delete node.password
+        }
+        return true
+      }
+    }
+  })
+})
+
 fastify.post('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
   try {
     return konekto.save(req.body, {
       hooks: {
-        beforeSave: node => {
-          if (!rbac.can('users', node._label, 'save', { user: req.user, node })) {
+        beforeSave: async node => {
+          const nodeDb = await konekto.findOneByQueryObject({
+            _label: node._label,
+            _where: { filter: '{this}._id = :id', params: { id: node._id } }
+          })
+
+          if (nodeDb) {
+            return rbac.can('users', node._label, 'update', { user: req.user, node })
+          }
+          console.log('here', nodeDb, node)
+          if (!rbac.can('users', node._label, 'create', { user: req.user, node })) {
             return false
           }
           if (node._id !== req.user._id) {
