@@ -25,7 +25,7 @@ const rbac = new RBAC({
         {
           name: '*',
           operation: 'delete',
-          when: ctx => ctx.user.id === ctx.node.user_id
+          when: ctx => ctx.user._id === ctx.node.user_id
         },
         {
           name: '*',
@@ -137,6 +137,9 @@ fastify.get('/me', { preValidation: [fastify.authenticate] }, (req, res) => {
   return konekto.findById(req.user._id, {
     hooks: {
       beforeRead: node => {
+        if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+          return false
+        }
         if (node._label === 'users') {
           delete node.password
         }
