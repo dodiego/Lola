@@ -23,29 +23,21 @@ fastify.register(require('fastify-jwt'), {
   secret: config.secret
 })
 
-fastify.decorate(
-  'authenticate',
-  /**
-   *
-   * @param {import('fastify').FastifyRequest} request
-   * @param {import('fastify').FastifyReply} reply
-   */
-  async function (request, reply) {
-    try {
-      const user = await request.jwtVerify()
-      const userDb = await konekto.findOneByQueryObject({
-        _label: 'users',
-        _where: { filter: '{this}._id = :id', params: { id: user._id } }
-      })
-      if (!userDb) {
-        throw new Error("User does't exist")
-      }
-    } catch (err) {
-      fastify.log.error(err)
-      reply.unauthorized()
+fastify.decorate('authenticate', async function (request, reply) {
+  try {
+    const user = await request.jwtVerify()
+    const userDb = await konekto.findOneByQueryObject({
+      _label: 'users',
+      _where: { filter: '{this}._id = :id', params: { id: user._id } }
+    })
+    if (!userDb) {
+      throw new Error("User does't exist")
     }
+  } catch (err) {
+    fastify.log.error(err)
+    reply.unauthorized()
   }
-)
+})
 
 fastify.post(
   '/signup',
@@ -244,8 +236,8 @@ fastify.delete('/api/relationships', { preValidation: [fastify.authenticate] }, 
 
 async function run () {
   await konekto.connect()
-  await konekto.createGraph('sigma')
-  await konekto.setGraph('sigma')
+  await konekto.createGraph(config.graphName)
+  await konekto.setGraph(config.graphName)
   await konekto.createSchema(require('./schema'))
   await fastify.listen(config.port, config.hostname)
 }
