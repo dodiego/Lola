@@ -21,6 +21,11 @@ module.exports = {
           name: '*',
           operation: 'read',
           when: ctx => !ctx.node.deleted
+        },
+        {
+          name: '*',
+          operation: '*',
+          when: ctx => ctx.user.is_admin
         }
       ]
     }

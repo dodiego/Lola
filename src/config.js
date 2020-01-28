@@ -7,5 +7,9 @@ module.exports = {
   port: env.require('PORT'),
   secret: env.require('SECRET'),
   graphName: env.require('GRAPH_NAME'),
-  tokenConfig: process.env.NODE_ENV === 'production' ? { expiresIn: '5m' } : {}
+  tokenConfig: process.env.NODE_ENV === 'production' ? { expiresIn: '5m' } : {},
+  adminUsername:
+    process.env.NODE_ENV === 'production' ? env.require('ADMIN_USERNAME') : process.env.ADMIN_USERNAME || 'admin',
+  adminPassword:
+    process.env.NODE_ENV === 'production' ? env.require('ADMIN_PASSWORD') : process.env.ADMIN_PASSWORD || 'admin'
 }
