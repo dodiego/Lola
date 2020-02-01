@@ -2,121 +2,180 @@ const config = require('./config')
 const bcrypt = require('bcrypt')
 const qs = require('qs')
 const { RBAC } = require('fast-rbac')
-const fastify = require('fastify')({
-  querystringParser: str => qs.parse(str),
-  logger: true
-})
+const server = require('uWebSockets.js')
+const logger = require('pino')()
 const Konekto = require('konekto')
 const konekto = new Konekto()
 const rbac = new RBAC(require('./rbac'))
+const jwt = require('jsonwebtoken')
+
+/**
+ *
+ * @param {import('uWebSockets.js').HttpResponse} res
+ * @param {String} _id
+ * @param {Boolean} isAdmin
+ */
 async function getToken (res, _id, isAdmin) {
+  let response
   try {
-    const token = await fastify.jwt.sign({ _id, is_admin: isAdmin }, config.tokenConfig)
-    return { token }
+    const token = await jwt.sign({ _id, is_admin: isAdmin }, config.secret, config.tokenConfig)
+    response = { token }
   } catch (error) {
-    res.internalServerError("couldn't login, please try again")
+    response = { message: "couldn't login, please try again" }
+    res.writeStatus('500')
+  }
+  respond(res, JSON.stringify(response))
+}
+function onAborted (res) {
+  res.onAborted(() => {
+    res.aborted = true
+  })
+}
+function respond (res, result) {
+  if (!res.aborted) {
+    res.end(JSON.stringify(result))
   }
 }
+const app = server.App()
 
-fastify.register(require('fastify-sensible'))
-fastify.register(require('fastify-jwt'), {
-  secret: config.secret
+app.post('/signup', async (res, req) => {
+  onAborted(res)
+
+  const user = await readBody(res)
+  const saltRounds = 10
+  user.password = await bcrypt.hash(user.password, saltRounds)
+  user._label = 'users'
+  delete user.is_admin
+  const id = await konekto.save(user)
+  await getToken(res, id, { is_admin: false })
 })
 
-fastify.decorate('authenticate', async function (request, reply) {
-  try {
-    const user = await request.jwtVerify()
-    const userDb = await konekto.findOneByQueryObject({
-      _label: 'users',
-      _where: { filter: '{this}._id = :id', params: { id: user._id } }
-    })
-    if (!userDb) {
-      throw new Error("User does't exist")
-    }
-  } catch (err) {
-    fastify.log.error(err)
-    reply.unauthorized()
-  }
-})
-
-fastify.post(
-  '/signup',
-  {
-    schema: {
-      body: {
-        type: 'object',
-        properties: {
-          username: { type: 'string' },
-          password: { type: 'string' }
-        },
-        required: ['username', 'password']
-      }
-    }
-  },
-  async (req, res) => {
-    const saltRounds = 10
-    req.body.password = await bcrypt.hash(req.body.password, saltRounds)
-    req.body._label = 'users'
-    delete req.body.is_admin
-    const id = await konekto.save(req.body)
-    return getToken(res, id, { is_admin: false })
-  }
-)
-
-fastify.post(
-  '/signin',
-  {
-    schema: {
-      body: {
-        type: 'object',
-        properties: {
-          username: { type: 'string' },
-          password: { type: 'string' }
-        },
-        required: ['username', 'password']
-      }
-    }
-  },
-  async (req, res) => {
-    const user = await konekto.findOneByQueryObject({
-      _label: 'users',
-      _where: {
-        filter: '{this}.username = :username',
-        params: {
-          username: req.body.username
-        }
-      }
-    })
-    if (!user) {
-      return res.notFound('user not found')
-    }
-    if (!(await bcrypt.compare(req.body.password, user.password))) {
-      return res.badRequest('invalid password')
-    }
-    delete user.password
-    return getToken(res, user._id, { is_admin: user.is_admin })
-  }
-)
-
-fastify.get('/me', { preValidation: [fastify.authenticate] }, (req, res) => {
-  return konekto.findById(req.user._id, {
-    hooks: {
-      beforeRead: node => {
-        if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
-          return false
-        }
-        if (node._label === 'users') {
-          delete node.password
-        }
-        return true
+app.post('/signin', async (res, req) => {
+  onAborted(res)
+  const payload = await readBody(res)
+  const user = await konekto.findOneByQueryObject({
+    _label: 'users',
+    _where: {
+      filter: '{this}.username = :username',
+      params: {
+        username: payload.username
       }
     }
   })
+  if (!user) {
+    return respond(res.writeStatus('404'))
+  }
+  if (!(await bcrypt.compare(payload.password, user.password))) {
+    return respond(res.writeStatus('400'))
+  }
+  delete user.password
+  await getToken(res, user._id, { is_admin: user.is_admin })
 })
 
-fastify.post('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
+/**
+ *
+ * @param {import('uWebSockets.js').HttpResponse} res
+ */
+function readBody (res) {
+  let buffer
+  return new Promise((resolve, reject) => {
+    res.onData((ab, isLast) => {
+      const chunk = Buffer.from(ab)
+      if (isLast) {
+        let json
+        if (buffer) {
+          try {
+            json = JSON.parse(Buffer.concat([buffer, chunk]))
+          } catch (e) {
+            res.close()
+            reject(e)
+          }
+
+          resolve(json)
+        } else {
+          try {
+            json = JSON.parse(chunk)
+          } catch (e) {
+            res.close()
+            reject(e)
+          }
+          resolve(json)
+        }
+      } else {
+        if (buffer) {
+          buffer = Buffer.concat([buffer, chunk])
+        } else {
+          buffer = Buffer.concat([chunk])
+        }
+      }
+    })
+  })
+}
+
+/**
+ *
+ * @param {import('uWebSockets.js').HttpResponse} res
+ * @param {import('uWebSockets.js').HttpRequest} req
+ */
+async function getUserFromToken (token) {
+  const user = await jwt.verify(token, config.secret)
+  const userDb = await konekto.findOneByQueryObject({
+    _label: 'users',
+    _where: { filter: '{this}._id = :id', params: { id: user._id } }
+  })
+  if (!userDb) {
+    throw new Error("User does't exist")
+  }
+  return userDb
+}
+
+/**
+ *
+ * @param {import('uWebSockets.js').HttpResponse} res
+ * @param {import('uWebSockets.js').HttpRequest} req
+ */
+async function authenticate (res, token) {
   try {
-    return konekto.save(req.body, {
+    return await getUserFromToken(token)
+  } catch (error) {
+    logger.error(error)
+    respond(res.writeStatus('401'))
+    throw error
+  }
+}
+
+app.get('/me', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
+  try {
+    const user = await authenticate(res, token)
+    const me = await konekto.findById(user._id, {
+      hooks: {
+        beforeRead: node => {
+          if (!rbac.can('users', node._label, 'read', { user, node })) {
+            return false
+          }
+          if (node._label === 'users') {
+            delete node.password
+          }
+          return true
+        }
+      }
+    })
+    respond(res, me)
+  } catch (error) {
+    logger.error(error)
+    respond(res.writeStatus('500'), { message: 'an error occurred' })
+  }
+})
+
+app.post('/api', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
+  try {
+    const body = await readBody(res)
+    const user = await authenticate(res, token)
+    const result = await konekto.save(body, {
       hooks: {
         beforeSave: async node => {
           const nodeDb = await konekto.findOneByQueryObject({
@@ -127,27 +186,32 @@ fastify.post('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
             delete node.is_admin
           }
           if (nodeDb) {
-            return rbac.can('users', node._label, 'update', { user: req.user, node })
+            return rbac.can('users', node._label, 'update', { user, node })
           }
-          if (!rbac.can('users', node._label, 'create', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'create', { user, node })) {
             return false
           }
-          if (node._id !== req.user._id) {
-            node.user_id = req.user._id
+          if (node._id !== user._id) {
+            node.user_id = user._id
           }
           return true
         }
       }
     })
+    respond(res, result)
   } catch (error) {
-    fastify.log.error(error)
-    res.forbidden('You cannot perform this action')
+    logger.error(error)
+    respond(res.writeStatus('403'), { message: 'You cannot perform this action' })
   }
 })
 
-fastify.get('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
+app.get('/api', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
+  const query = req.getQuery()
   try {
-    return konekto.findByQueryObject(req.query, {
+    const user = await authenticate(res, token)
+    const result = await konekto.findByQueryObject(qs.parse(query), {
       hooks: {
         beforeParseNode (node) {
           if (node._where) {
@@ -157,7 +221,7 @@ fastify.get('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
           }
         },
         beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
             return false
           }
           if (node._label === 'users') {
@@ -167,18 +231,22 @@ fastify.get('/api', { preValidation: [fastify.authenticate] }, (req, res) => {
         }
       }
     })
+    respond(res, result)
   } catch (error) {
-    fastify.log.error(error)
-    res.internalServerError('Plase try again')
+    logger.error(error)
+    respond(res.writeStatus('500'), { message: 'an error has occurred, please try again' })
   }
 })
 
-fastify.get('/api/id/:id', { preValidation: [fastify.authenticate] }, async (req, res) => {
+app.get('/api/id/:id', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
   try {
+    const user = await authenticate(res, token)
     const result = await konekto.findById(req.params.id, {
       hooks: {
         beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
             return false
           }
           if (node._label === 'users') {
@@ -189,54 +257,96 @@ fastify.get('/api/id/:id', { preValidation: [fastify.authenticate] }, async (req
       }
     })
     if (result) {
-      return res.send(result)
+      return respond(res, result)
     }
-    return res.notFound('root not found')
+    return respond(res, { message: 'root not found' })
   } catch (error) {
-    fastify.log.error(error)
-    res.internalServerError('Plase try again')
+    logger.error(error)
+    respond(res, { message: 'Plase try again' })
   }
 })
 
-fastify.delete('/api', { preValidation: [fastify.authenticate] }, async (req, res) => {
-  const result = await konekto.findByQueryObject(req.query)
-  await konekto.save(result, {
-    hooks: {
-      beforeSave (node) {
-        if (!rbac.can('users', node._label, 'delete', { user: req.user, node })) {
-          return false
+app.del('/api', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
+  try {
+    const user = await authenticate(res, token)
+    const result = await konekto.findByQueryObject(req.query, {
+      hooks: {
+        beforeRead: node => {
+          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
+            throw new Error('unauthorized')
+          }
+          if (node._label === 'users') {
+            delete node.password
+          }
+          return true
         }
-        node.deleted = true
-        return true
       }
-    }
-  })
+    })
+    await konekto.save(result, {
+      hooks: {
+        beforeSave (node) {
+          if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
+            return false
+          }
+          node.deleted = true
+          return true
+        }
+      }
+    })
+    respond(res, result)
+  } catch (error) {
+    logger.error(error)
+    respond(res, { message: 'please try again' })
+  }
 })
 
-fastify.delete('/api/id/:id', { preValidation: [fastify.authenticate] }, async (req, res) => {
-  const result = await konekto.findOneByQueryObject({
-    _where: {
-      filter: '{this}._id = :id',
-      params: {
-        id: req.params.id
-      }
-    }
-  })
-  return konekto.save(result, {
-    hooks: {
-      beforeSave (node) {
-        if (!rbac.can('users', node._label, 'delete', { user: req.user, node })) {
-          return false
+app.del('/api/id/:id', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
+  const id = req.getParameter(0)
+  try {
+    const user = await authenticate(res, token)
+    const result = await konekto.findOneByQueryObject(
+      {
+        _where: {
+          filter: '{this}._id = :id',
+          params: {
+            id
+          }
         }
-        node.deleted = true
-        return true
+      },
+      {
+        hooks: {
+          beforeRead: node => {
+            if (!rbac.can('users', node._label, 'read', { user: user, node })) {
+              throw new Error('unauthorized')
+            }
+            if (node._label === 'users') {
+              delete node.password
+            }
+            return true
+          }
+        }
       }
-    }
-  })
-})
-
-fastify.delete('/api/relationships', { preValidation: [fastify.authenticate] }, (req, res) => {
-  return konekto.deleteRelationships(req.query)
+    )
+    await konekto.save(result, {
+      hooks: {
+        beforeSave (node) {
+          if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
+            return false
+          }
+          node.deleted = true
+          return true
+        }
+      }
+    })
+    respond(res, result)
+  } catch (error) {
+    logger.error(error)
+    respond(res, { message: 'please try again' })
+  }
 })
 
 async function run () {
@@ -256,10 +366,21 @@ async function run () {
       password: await bcrypt.hash(config.adminPassword, 10)
     })
   }
-  await fastify.listen(config.port, config.hostname)
+  await new Promise((resolve, reject) => {
+    app.listen(config.hostname, config.port, socket => {
+      if (socket) {
+        resolve()
+      } else {
+        reject(new Error('failed to start server'))
+      }
+    })
+  })
+  logger.info('server started')
 }
 
 run().catch(e => {
-  fastify.log.fatal(e)
+  logger.fatal(e)
   process.exit(1)
 })
+
+module.exports = class Lola {}
