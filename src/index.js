@@ -108,7 +108,6 @@ function readBody (res) {
           buffer = Buffer.concat([chunk])
         }
       }
-      reject(new Error('could not parse body'))
     })
   })
 }
@@ -118,33 +117,42 @@ function readBody (res) {
  * @param {import('uWebSockets.js').HttpResponse} res
  * @param {import('uWebSockets.js').HttpRequest} req
  */
-async function authenticate (res, req) {
-  onAborted(res)
+async function getUserFromToken (token) {
+  const user = await jwt.verify(token, config.secret)
+  const userDb = await konekto.findOneByQueryObject({
+    _label: 'users',
+    _where: { filter: '{this}._id = :id', params: { id: user._id } }
+  })
+  if (!userDb) {
+    throw new Error("User does't exist")
+  }
+  return userDb
+}
+
+/**
+ *
+ * @param {import('uWebSockets.js').HttpResponse} res
+ * @param {import('uWebSockets.js').HttpRequest} req
+ */
+async function authenticate (res, token) {
   try {
-    console.log(req.getHeader('authorization'))
-    const user = await jwt.verify(req.getHeader('authorization'), config.secret)
-    const userDb = await konekto.findOneByQueryObject({
-      _label: 'users',
-      _where: { filter: '{this}._id = :id', params: { id: user._id } }
-    })
-    if (!userDb) {
-      throw new Error("User does't exist")
-    }
-    req.user = userDb
-  } catch (err) {
-    logger.error(err)
+    return await getUserFromToken(token)
+  } catch (error) {
+    logger.error(error)
     respond(res.writeStatus('401'))
-    throw err
+    throw error
   }
 }
 
 app.get('/me', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
   try {
-    await authenticate(res, req)
-    const me = await konekto.findById(req.user._id, {
+    const user = await authenticate(res, token)
+    const me = await konekto.findById(user._id, {
       hooks: {
         beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'read', { user, node })) {
             return false
           }
           if (node._label === 'users') {
@@ -162,10 +170,11 @@ app.get('/me', async (res, req) => {
 })
 
 app.post('/api', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
   try {
-    await authenticate(res, req)
     const body = await readBody(res)
-    console.log(res.aborted)
+    const user = await authenticate(res, token)
     const result = await konekto.save(body, {
       hooks: {
         beforeSave: async node => {
@@ -177,13 +186,13 @@ app.post('/api', async (res, req) => {
             delete node.is_admin
           }
           if (nodeDb) {
-            return rbac.can('users', node._label, 'update', { user: req.user, node })
+            return rbac.can('users', node._label, 'update', { user, node })
           }
-          if (!rbac.can('users', node._label, 'create', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'create', { user, node })) {
             return false
           }
-          if (node._id !== req.user._id) {
-            node.user_id = req.user._id
+          if (node._id !== user._id) {
+            node.user_id = user._id
           }
           return true
         }
@@ -197,9 +206,12 @@ app.post('/api', async (res, req) => {
 })
 
 app.get('/api', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
+  const query = req.getQuery()
   try {
-    await authenticate(req, res)
-    const result = await konekto.findByQueryObject(qs.parse(req.getQuery()), {
+    const user = await authenticate(res, token)
+    const result = await konekto.findByQueryObject(qs.parse(query), {
       hooks: {
         beforeParseNode (node) {
           if (node._where) {
@@ -209,7 +221,7 @@ app.get('/api', async (res, req) => {
           }
         },
         beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
             return false
           }
           if (node._label === 'users') {
@@ -227,12 +239,14 @@ app.get('/api', async (res, req) => {
 })
 
 app.get('/api/id/:id', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
   try {
-    await authenticate(res, req)
+    const user = await authenticate(res, token)
     const result = await konekto.findById(req.params.id, {
       hooks: {
         beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
             return false
           }
           if (node._label === 'users') {
@@ -253,12 +267,14 @@ app.get('/api/id/:id', async (res, req) => {
 })
 
 app.del('/api', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
   try {
-    await authenticate(req, res)
+    const user = await authenticate(res, token)
     const result = await konekto.findByQueryObject(req.query, {
       hooks: {
         beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
             throw new Error('unauthorized')
           }
           if (node._label === 'users') {
@@ -271,7 +287,7 @@ app.del('/api', async (res, req) => {
     await konekto.save(result, {
       hooks: {
         beforeSave (node) {
-          if (!rbac.can('users', node._label, 'delete', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
             return false
           }
           node.deleted = true
@@ -287,21 +303,24 @@ app.del('/api', async (res, req) => {
 })
 
 app.del('/api/id/:id', async (res, req) => {
+  onAborted(res)
+  const token = req.getHeader('authorization')
+  const id = req.getParameter(0)
   try {
-    await authenticate(res, req)
+    const user = await authenticate(res, token)
     const result = await konekto.findOneByQueryObject(
       {
         _where: {
           filter: '{this}._id = :id',
           params: {
-            id: req.params.id
+            id
           }
         }
       },
       {
         hooks: {
           beforeRead: node => {
-            if (!rbac.can('users', node._label, 'read', { user: req.user, node })) {
+            if (!rbac.can('users', node._label, 'read', { user: user, node })) {
               throw new Error('unauthorized')
             }
             if (node._label === 'users') {
@@ -315,7 +334,7 @@ app.del('/api/id/:id', async (res, req) => {
     await konekto.save(result, {
       hooks: {
         beforeSave (node) {
-          if (!rbac.can('users', node._label, 'delete', { user: req.user, node })) {
+          if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
             return false
           }
           node.deleted = true
