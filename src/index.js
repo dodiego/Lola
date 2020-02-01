@@ -13,12 +13,11 @@ const jwt = require('jsonwebtoken')
  *
  * @param {import('uWebSockets.js').HttpResponse} res
  * @param {String} _id
- * @param {Boolean} isAdmin
  */
-async function getToken (res, _id, isAdmin) {
+async function getToken (res, _id) {
   let response
   try {
-    const token = await jwt.sign({ _id, is_admin: isAdmin }, config.secret, config.tokenConfig)
+    const token = await jwt.sign({ _id }, config.secret, config.tokenConfig)
     response = { token }
   } catch (error) {
     response = { message: "couldn't login, please try again" }
@@ -26,51 +25,18 @@ async function getToken (res, _id, isAdmin) {
   }
   respond(res, JSON.stringify(response))
 }
+
 function onAborted (res) {
   res.onAborted(() => {
     res.aborted = true
   })
 }
+
 function respond (res, result) {
   if (!res.aborted) {
     res.end(JSON.stringify(result))
   }
 }
-const app = server.App()
-
-app.post('/signup', async (res, req) => {
-  onAborted(res)
-
-  const user = await readBody(res)
-  const saltRounds = 10
-  user.password = await bcrypt.hash(user.password, saltRounds)
-  user._label = 'users'
-  delete user.is_admin
-  const id = await konekto.save(user)
-  await getToken(res, id, { is_admin: false })
-})
-
-app.post('/signin', async (res, req) => {
-  onAborted(res)
-  const payload = await readBody(res)
-  const user = await konekto.findOneByQueryObject({
-    _label: 'users',
-    _where: {
-      filter: '{this}.username = :username',
-      params: {
-        username: payload.username
-      }
-    }
-  })
-  if (!user) {
-    return respond(res.writeStatus('404'))
-  }
-  if (!(await bcrypt.compare(payload.password, user.password))) {
-    return respond(res.writeStatus('400'))
-  }
-  delete user.password
-  await getToken(res, user._id, { is_admin: user.is_admin })
-})
 
 /**
  *
@@ -118,15 +84,15 @@ function readBody (res) {
  * @param {import('uWebSockets.js').HttpRequest} req
  */
 async function getUserFromToken (token) {
-  const user = await jwt.verify(token, config.secret)
-  const userDb = await konekto.findOneByQueryObject({
+  const { _id } = await jwt.verify(token, config.secret)
+  const user = await konekto.findOneByQueryObject({
     _label: 'users',
-    _where: { filter: '{this}._id = :id', params: { id: user._id } }
+    _where: { filter: '{this}._id = :_id', params: { _id } }
   })
-  if (!userDb) {
+  if (!user) {
     throw new Error("User does't exist")
   }
-  return userDb
+  return user
 }
 
 /**
@@ -144,6 +110,60 @@ async function authenticate (res, token) {
   }
 }
 
+function beforeRead (user, node) {
+  if (!rbac.can('users', node._label, 'read', { user, node })) {
+    return false
+  }
+  if (node._label === 'users') {
+    delete node.password
+  }
+  return true
+}
+
+function beforeReadDelete (user, node) {
+  if (!beforeRead(user, node)) {
+    throw new Error('not authorized')
+  }
+  return true
+}
+
+const app = server.App()
+
+app.post('/signup', async (res, req) => {
+  onAborted(res)
+
+  const user = await readBody(res)
+  const saltRounds = 10
+  user.password = await bcrypt.hash(user.password, saltRounds)
+  user._label = 'users'
+  const id = await konekto.save(user)
+  await getToken(res, id)
+})
+
+app.post('/signin', async (res, req) => {
+  onAborted(res)
+  const payload = await readBody(res)
+  const user = await konekto.findOneByQueryObject({
+    _label: 'users',
+    _where: {
+      filter: '{this}.username = :username',
+      params: {
+        username: payload.username
+      }
+    }
+  })
+  if (!user) {
+    logger.info('user not found')
+    return respond(res.writeStatus('400'))
+  }
+  if (!(await bcrypt.compare(payload.password, user.password))) {
+    logger.info('invalid password')
+    return respond(res.writeStatus('400'))
+  }
+  delete user.password
+  await getToken(res, user._id)
+})
+
 app.get('/me', async (res, req) => {
   onAborted(res)
   const token = req.getHeader('authorization')
@@ -151,15 +171,7 @@ app.get('/me', async (res, req) => {
     const user = await authenticate(res, token)
     const me = await konekto.findById(user._id, {
       hooks: {
-        beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user, node })) {
-            return false
-          }
-          if (node._label === 'users') {
-            delete node.password
-          }
-          return true
-        }
+        beforeRead: node => beforeRead(user, node)
       }
     })
     respond(res, me)
@@ -182,19 +194,10 @@ app.post('/api', async (res, req) => {
             _label: node._label,
             _where: { filter: '{this}._id = :id', params: { id: node._id } }
           })
-          if (node._label === 'users') {
-            delete node.is_admin
-          }
           if (nodeDb) {
             return rbac.can('users', node._label, 'update', { user, node })
           }
-          if (!rbac.can('users', node._label, 'create', { user, node })) {
-            return false
-          }
-          if (node._id !== user._id) {
-            node.user_id = user._id
-          }
-          return true
+          return rbac.can('users', node._label, 'create', { user, node })
         }
       }
     })
@@ -213,22 +216,7 @@ app.get('/api', async (res, req) => {
     const user = await authenticate(res, token)
     const result = await konekto.findByQueryObject(qs.parse(query), {
       hooks: {
-        beforeParseNode (node) {
-          if (node._where) {
-            node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
-          } else {
-            node._where = { filter: '{this}.deleted IS NULL' }
-          }
-        },
-        beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-            return false
-          }
-          if (node._label === 'users') {
-            delete node.password
-          }
-          return true
-        }
+        beforeRead: node => beforeRead(user, node)
       }
     })
     respond(res, result)
@@ -245,15 +233,7 @@ app.get('/api/id/:id', async (res, req) => {
     const user = await authenticate(res, token)
     const result = await konekto.findById(req.params.id, {
       hooks: {
-        beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-            return false
-          }
-          if (node._label === 'users') {
-            delete node.password
-          }
-          return true
-        }
+        beforeRead: node => beforeRead(user, node)
       }
     })
     if (result) {
@@ -269,32 +249,16 @@ app.get('/api/id/:id', async (res, req) => {
 app.del('/api', async (res, req) => {
   onAborted(res)
   const token = req.getHeader('authorization')
+  const query = qs.parse(req.getQuery())
   try {
     const user = await authenticate(res, token)
-    const result = await konekto.findByQueryObject(req.query, {
+    const result = await konekto.findByQueryObject(query, {
       hooks: {
-        beforeRead: node => {
-          if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-            throw new Error('unauthorized')
-          }
-          if (node._label === 'users') {
-            delete node.password
-          }
-          return true
-        }
+        beforeRead: node =>
+          beforeReadDelete(user, node) && rbac.can('users', node._label, 'delete', { user: user, node })
       }
     })
-    await konekto.save(result, {
-      hooks: {
-        beforeSave (node) {
-          if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
-            return false
-          }
-          node.deleted = true
-          return true
-        }
-      }
-    })
+    await konekto.deleteByQueryObject(query)
     respond(res, result)
   } catch (error) {
     logger.error(error)
@@ -308,38 +272,10 @@ app.del('/api/id/:id', async (res, req) => {
   const id = req.getParameter(0)
   try {
     const user = await authenticate(res, token)
-    const result = await konekto.findOneByQueryObject(
-      {
-        _where: {
-          filter: '{this}._id = :id',
-          params: {
-            id
-          }
-        }
-      },
-      {
-        hooks: {
-          beforeRead: node => {
-            if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-              throw new Error('unauthorized')
-            }
-            if (node._label === 'users') {
-              delete node.password
-            }
-            return true
-          }
-        }
-      }
-    )
-    await konekto.save(result, {
+    const result = await konekto.deleteById(id, {
       hooks: {
-        beforeSave (node) {
-          if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
-            return false
-          }
-          node.deleted = true
-          return true
-        }
+        beforeRead: node =>
+          beforeReadDelete(user, node) && rbac.can('users', node._label, 'delete', { user: user, node })
       }
     })
     respond(res, result)
