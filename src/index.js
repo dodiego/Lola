@@ -1,13 +1,7 @@
 const Server = require('./server')
 const Konekto = require('konekto')
 module.exports = class Lola {
-  /**
-   *
-   * @param {any} connectionConfig
-   * @param {import('fast-rbac').RBAC} rbac
-   * @param {*} jwtConfig
-   */
-  constructor (connectionConfig, rbac, jwtConfig) {
+  constructor (jwtConfig, rbac, connectionConfig) {
     const konekto = new Konekto(connectionConfig)
     const server = new Server({ konekto, rbac, jwtConfig })
 
@@ -16,16 +10,19 @@ module.exports = class Lola {
   }
 
   async seed (graphName, schema, seedFn = function () {}) {
+    if (!graphName || typeof graphName !== 'string') {
+      throw new Error('graphName must be a string')
+    }
     await this.konekto.connect()
     await this.konekto.createGraph(graphName)
     await this.konekto.setGraph(graphName)
     await this.konekto.createSchema(schema)
     await seedFn(this.konekto)
-    this._sedeed = true
+    this._seeded = true
   }
 
   async start (hostname, port) {
-    if (!this._sedeed) {
+    if (!this._seeded) {
       throw new Error('You need to seed the database before starting the server')
     }
     await this.server.listen(hostname, port)

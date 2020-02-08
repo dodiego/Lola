@@ -1,4 +1,19 @@
+const Konekto = require('konekto')
 const jwt = require('jsonwebtoken')
+const { promisify } = require('util')
+const jwtSign = promisify(jwt.sign)
+const jwtVerify = promisify(jwt.verify)
+const Ajv = require('ajv')
+const ajv = new Ajv({ allErrors: true, jsonPointers: true })
+require('ajv-errors')(ajv)
+const jwtSchema = require('../json_schemas/jwt_config.json')
+
+function validate (schema, object) {
+  const result = ajv.validate(schema, object)
+  if (!result) {
+    throw new Error(ajv.errors.map(e => e.message).join('\n'))
+  }
+}
 
 function onAborted (res) {
   res.onAborted(() => {
@@ -52,9 +67,12 @@ function readBody (res) {
 }
 
 class TokenHelper {
-  constructor (jwtConfig, logger, konektoInstance) {
+  constructor (jwtConfig, konektoInstance) {
+    validate(jwtSchema, jwtConfig)
+    if (!(konektoInstance instanceof Konekto)) {
+      throw new Error('You must provide a valid Konekto instance')
+    }
     this._jwtConfig = jwtConfig
-    this._logger = logger
     this._konekto = konektoInstance
   }
 
@@ -66,7 +84,7 @@ class TokenHelper {
   async getToken (res, _id) {
     let response
     try {
-      const token = await jwt.sign({ _id }, this._jwtConfig.secret, this._jwtConfig.options)
+      const token = await jwtSign({ _id }, this._jwtConfig.secret, this._jwtConfig.options)
       response = { token }
     } catch (error) {
       response = { message: "couldn't login, please try again" }
@@ -76,7 +94,7 @@ class TokenHelper {
   }
 
   async getUserFromToken (token) {
-    const user = await jwt.verify(token, this._jwtConfig.secret)
+    const user = await jwtVerify(token, this._jwtConfig.secret)
     const userDb = await this._konekto.findOneByQueryObject({
       _label: 'users',
       _where: { filter: '{this}._id = :id', params: { id: user._id } }
@@ -96,7 +114,6 @@ class TokenHelper {
     try {
       return await this.getUserFromToken(token)
     } catch (error) {
-      this._logger.error(error)
       respond(res.writeStatus('401'))
       throw error
     }

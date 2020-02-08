@@ -2,11 +2,22 @@ const server = require('uWebSockets.js')
 const bcrypt = require('bcrypt')
 const qs = require('qs')
 const { onAborted, readBody, respond, TokenHelper } = require('./utils')
+const { RBAC } = require('fast-rbac')
 
 module.exports = class Server {
   constructor ({ konekto, jwtConfig, rbac }) {
+    if (!rbac) {
+      throw new Error('You must provide at least an empty object for RBAC')
+    }
+    if (!(rbac instanceof RBAC) && !Object.keys(rbac).length) {
+      rbac = new RBAC({
+        roles: {
+          '*': { can: '*' }
+        }
+      })
+    }
     const app = server.App()
-    const tokenHelper = new TokenHelper(jwtConfig)
+    const tokenHelper = new TokenHelper(jwtConfig, konekto)
     const logger = require('pino')()
     app.post('/signup', async (res, req) => {
       onAborted(res)
@@ -253,15 +264,27 @@ module.exports = class Server {
   }
 
   async listen (hostname, port) {
+    if (!hostname || typeof hostname !== 'string') {
+      throw new Error('You must provide a hostname and it must be a string')
+    }
+    if (isNaN(port) || typeof port !== 'number' || port < 0) {
+      throw new Error('Port must be a number greather or equal to zero')
+    }
     await new Promise((resolve, reject) => {
       this.app.listen(hostname, port, socket => {
         if (socket) {
-          resolve()
+          this._socket = socket
+          this.isOnline = true
+          resolve(socket)
         } else {
           reject(new Error('failed to start server'))
         }
       })
     })
     this.logger.info('server started')
+  }
+
+  disconnect () {
+    server.us_listen_socket_close(this._socket)
   }
 }
