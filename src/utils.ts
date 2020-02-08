@@ -1,37 +1,35 @@
-const Konekto = require('konekto')
-const jwt = require('jsonwebtoken')
+// @ts-ignore
+import Konekto from 'konekto'
+import jwt from 'jsonwebtoken'
+import { HttpResponse } from 'uWebSockets.js'
+import Ajv from 'ajv'
+import jwtSchema from '../json_schemas/jwt_config.json'
 const { promisify } = require('util')
 const jwtSign = promisify(jwt.sign)
 const jwtVerify = promisify(jwt.verify)
-const Ajv = require('ajv')
 const ajv = new Ajv({ allErrors: true, jsonPointers: true })
 require('ajv-errors')(ajv)
-const jwtSchema = require('../json_schemas/jwt_config.json')
 
-function validate (schema, object) {
+function validate (schema: any, object: any) {
   const result = ajv.validate(schema, object)
   if (!result) {
-    throw new Error(ajv.errors.map(e => e.message).join('\n'))
+    throw new Error(ajv?.errors?.map(e => e.message).join('\n'))
   }
 }
 
-function onAborted (res) {
+export function onAborted (res: HttpResponse) {
   res.onAborted(() => {
     res.aborted = true
   })
 }
-function respond (res, result) {
+export function respond (res: HttpResponse, result?: object) {
   if (!res.aborted) {
     res.end(JSON.stringify(result))
   }
 }
 
-/**
- *
- * @param {import('uWebSockets.js').HttpResponse} res
- */
-function readBody (res) {
-  let buffer
+export function readBody (res: HttpResponse): Promise<any> {
+  let buffer: Uint8Array
   return new Promise((resolve, reject) => {
     res.onData((ab, isLast) => {
       const chunk = Buffer.from(ab)
@@ -39,7 +37,7 @@ function readBody (res) {
         let json
         if (buffer) {
           try {
-            json = JSON.parse(Buffer.concat([buffer, chunk]))
+            json = JSON.parse((Buffer.concat([buffer, chunk]) as unknown) as string)
           } catch (e) {
             res.close()
             reject(e)
@@ -48,7 +46,7 @@ function readBody (res) {
           resolve(json)
         } else {
           try {
-            json = JSON.parse(chunk)
+            json = JSON.parse((chunk as unknown) as string)
           } catch (e) {
             res.close()
             reject(e)
@@ -66,22 +64,20 @@ function readBody (res) {
   })
 }
 
-class TokenHelper {
-  constructor (jwtConfig, konektoInstance) {
-    validate(jwtSchema, jwtConfig)
-    if (!(konektoInstance instanceof Konekto)) {
+export interface JwtConfig {
+  options?: jwt.SignOptions
+  secret: string
+}
+
+export class TokenHelper {
+  constructor (private _jwtConfig: JwtConfig, private _konekto: Konekto) {
+    validate(jwtSchema, _jwtConfig)
+    if (!(_konekto instanceof Konekto)) {
       throw new Error('You must provide a valid Konekto instance')
     }
-    this._jwtConfig = jwtConfig
-    this._konekto = konektoInstance
   }
 
-  /**
-   *
-   * @param {import('uWebSockets.js').HttpResponse} res
-   * @param {String} _id
-   */
-  async getToken (res, _id) {
+  async getToken (res: HttpResponse, _id: string) {
     let response
     try {
       const token = await jwtSign({ _id }, this._jwtConfig.secret, this._jwtConfig.options)
@@ -90,11 +86,11 @@ class TokenHelper {
       response = { message: "couldn't login, please try again" }
       res.writeStatus('500')
     }
-    respond(res, JSON.stringify(response))
+    respond(res, response)
   }
 
-  async getUserFromToken (token) {
-    const user = await jwtVerify(token, this._jwtConfig.secret)
+  async getUserFromToken (token: string) {
+    const user: any = await jwtVerify(token, this._jwtConfig.secret)
     const userDb = await this._konekto.findOneByQueryObject({
       _label: 'users',
       _where: { filter: '{this}._id = :id', params: { id: user._id } }
@@ -105,12 +101,7 @@ class TokenHelper {
     return userDb
   }
 
-  /**
-   *
-   * @param {import('uWebSockets.js').HttpResponse} res
-   * @param {import('uWebSockets.js').HttpRequest} req
-   */
-  async authenticate (res, token) {
+  async authenticate (res: HttpResponse, token: string) {
     try {
       return await this.getUserFromToken(token)
     } catch (error) {
@@ -118,11 +109,4 @@ class TokenHelper {
       throw error
     }
   }
-}
-
-module.exports = {
-  onAborted,
-  respond,
-  readBody,
-  TokenHelper
 }

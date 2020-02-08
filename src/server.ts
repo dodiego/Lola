@@ -1,18 +1,32 @@
-const server = require('uWebSockets.js')
-const bcrypt = require('bcrypt')
-const qs = require('qs')
-const { onAborted, readBody, respond, TokenHelper } = require('./utils')
-const { RBAC } = require('fast-rbac')
+import server from 'uWebSockets.js'
+import bcrypt from 'bcrypt'
+import qs from 'qs'
+import { onAborted, readBody, respond, TokenHelper, JwtConfig } from './utils'
+import { RBAC } from 'fast-rbac'
+import { Logger } from 'pino'
 
-module.exports = class Server {
-  constructor ({ konekto, jwtConfig, rbac }) {
-    if (!rbac) {
+interface ServerConfig {
+  konekto: any
+  jwtConfig: JwtConfig
+  rbacOptions: RBAC.Options
+}
+
+export = class Server {
+  app: server.TemplatedApp
+  konekto: any
+  logger: Logger
+  _socket: any
+  isOnline: boolean = false
+
+  constructor ({ konekto, jwtConfig, rbacOptions }: ServerConfig) {
+    let rbac: RBAC
+    if (!rbacOptions) {
       throw new Error('You must provide at least an empty object for RBAC')
     }
-    if (!(rbac instanceof RBAC) && !Object.keys(rbac).length) {
+    if (!Object.keys(rbacOptions).length) {
       rbac = new RBAC({
         roles: {
-          '*': { can: '*' }
+          '*': { can: ['*'] }
         }
       })
     }
@@ -60,7 +74,7 @@ module.exports = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const me = await konekto.findById(user._id, {
           hooks: {
-            beforeRead: node => {
+            beforeRead: (node: any) => {
               if (!rbac.can('users', node._label, 'read', { user, node })) {
                 return false
               }
@@ -86,7 +100,7 @@ module.exports = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const result = await konekto.save(body, {
           hooks: {
-            beforeSave: async node => {
+            beforeSave: async (node: any) => {
               const nodeDb = await konekto.findOneByQueryObject({
                 _label: node._label,
                 _where: { filter: '{this}._id = :id', params: { id: node._id } }
@@ -122,14 +136,14 @@ module.exports = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const result = await konekto.findByQueryObject(qs.parse(query), {
           hooks: {
-            beforeParseNode (node) {
+            beforeParseNode (node: any) {
               if (node._where) {
                 node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
               } else {
                 node._where = { filter: '{this}.deleted IS NULL' }
               }
             },
-            beforeRead: node => {
+            beforeRead: (node: any) => {
               if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                 return false
               }
@@ -149,12 +163,13 @@ module.exports = class Server {
 
     app.get('/api/id/:id', async (res, req) => {
       onAborted(res)
+      const id = req.getParameter(0)
       const token = req.getHeader('authorization')
       try {
         const user = await tokenHelper.authenticate(res, token)
-        const result = await konekto.findById(req.params.id, {
+        const result = await konekto.findById(id, {
           hooks: {
-            beforeRead: node => {
+            beforeRead: (node: any) => {
               if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                 return false
               }
@@ -178,11 +193,12 @@ module.exports = class Server {
     app.del('/api', async (res, req) => {
       onAborted(res)
       const token = req.getHeader('authorization')
+      const query = qs.parse(req.getQuery())
       try {
         const user = await tokenHelper.authenticate(res, token)
-        const result = await konekto.findByQueryObject(req.query, {
+        const result = await konekto.findByQueryObject(query, {
           hooks: {
-            beforeRead: node => {
+            beforeRead: (node: any) => {
               if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                 throw new Error('unauthorized')
               }
@@ -195,7 +211,7 @@ module.exports = class Server {
         })
         await konekto.save(result, {
           hooks: {
-            beforeSave (node) {
+            beforeSave (node: any) {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -228,7 +244,7 @@ module.exports = class Server {
           },
           {
             hooks: {
-              beforeRead: node => {
+              beforeRead: (node: any) => {
                 if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                   throw new Error('unauthorized')
                 }
@@ -242,7 +258,7 @@ module.exports = class Server {
         )
         await konekto.save(result, {
           hooks: {
-            beforeSave (node) {
+            beforeSave (node: any) {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -263,7 +279,7 @@ module.exports = class Server {
     this.logger = logger
   }
 
-  async listen (hostname, port) {
+  async listen (hostname: string, port: number) {
     if (!hostname || typeof hostname !== 'string') {
       throw new Error('You must provide a hostname and it must be a string')
     }

@@ -1,6 +1,7 @@
-const Lola = require('../src/index')
-const Server = require('../src/server')
-const Konekto = require('konekto')
+// @ts-nocheck
+import Lola from '../src/index'
+import Server from '../src/server'
+import Konekto from 'konekto'
 const jwtConfig = {
   secret: 'xd'
 }
@@ -15,12 +16,12 @@ describe('lola', () => {
   describe('constructor', () => {
     test('Should instantiate konekto and server on constructor', () => {
       const lola = new Lola(jwtConfig, {}, 'xd')
-      expect(Server).toHaveBeenCalledWith({ konekto: lola.konekto, jwtConfig, rbac: {} })
+      expect(Server).toHaveBeenCalledWith({ konekto: lola.konekto, jwtConfig, rbacOptions: {} })
       expect(Konekto).toHaveBeenCalledWith('xd')
     })
   })
   describe('seed', () => {
-    let lola
+    let lola: Lola
     beforeEach(async () => {
       lola = new Lola(jwtConfig, {}, 'xd')
     })
@@ -49,7 +50,7 @@ describe('lola', () => {
     })
   })
   describe('start', () => {
-    let lola
+    let lola: Lola
     beforeEach(async () => {
       lola = new Lola(jwtConfig, {}, 'xd')
     })

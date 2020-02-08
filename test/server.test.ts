@@ -1,5 +1,6 @@
-const Server = require('../src/server')
-const Konekto = require('konekto')
+// @ts-nocheck
+import Server from '../src/server'
+import Konekto from 'konekto'
 const konekto = new Konekto()
 const jwtConfig = {
   secret: 'xd'
@@ -7,42 +8,42 @@ const jwtConfig = {
 describe('server', () => {
   describe('constructor', () => {
     test('Should instantiate with correct parameters', () => {
-      expect(() => new Server({ konekto, jwtConfig, rbac: {} })).not.toThrow()
+      expect(() => new Server({ konekto, jwtConfig, rbacOptions: {} })).not.toThrow()
     })
     test('Should throw if konekto is not provided', () => {
-      expect(() => new Server({ jwtConfig, rbac: {} })).toThrow('You must provide a valid Konekto instance')
+      expect(() => new Server({ jwtConfig, rbacOptions: {} })).toThrow('You must provide a valid Konekto instance')
     })
     test('Should throw if jwtConfig is not provided', () => {
-      expect(() => new Server({ konekto, rbac: {} })).toThrow('You must provide jwtConfig')
+      expect(() => new Server({ konekto, rbacOptions: {} })).toThrow('You must provide jwtConfig')
     })
     test('Should throw if rbac is not provided', () => {
       expect(() => new Server({ konekto, jwtConfig })).toThrow('You must provide at least an empty object for RBAC')
     })
     test('Should throw if jwtConfig.secret is empty', () => {
-      expect(() => new Server({ konekto, jwtConfig: { secret: '' }, rbac: {} })).toThrow(
+      expect(() => new Server({ konekto, jwtConfig: { secret: '' }, rbacOptions: {} })).toThrow(
         'jwtConfig.secret must be a non-empty string'
       )
     })
     test('Should throw if jwtConfig.secret is null', () => {
-      expect(() => new Server({ konekto, jwtConfig: { secret: null }, rbac: {} })).toThrow(
+      expect(() => new Server({ konekto, jwtConfig: { secret: null }, rbacOptions: {} })).toThrow(
         'jwtConfig.secret must be a non-empty string'
       )
     })
     test('Should throw if jwtConfig.secret is undefined', () => {
-      expect(() => new Server({ konekto, jwtConfig: { secret: undefined }, rbac: {} })).toThrow(
+      expect(() => new Server({ konekto, jwtConfig: { secret: undefined }, rbacOptions: {} })).toThrow(
         'jwtConfig.secret is required'
       )
     })
     test('Should throw if jwtConfig is empty object', () => {
-      expect(() => new Server({ konekto, jwtConfig: { secret: undefined }, rbac: {} })).toThrow(
+      expect(() => new Server({ konekto, jwtConfig: { secret: undefined }, rbacOptions: {} })).toThrow(
         'jwtConfig.secret is required'
       )
     })
   })
   describe('listen', () => {
-    let server
+    let server: Server
     beforeEach(() => {
-      server = new Server({ konekto, jwtConfig, rbac: {} })
+      server = new Server({ konekto, jwtConfig, rbacOptions: {} })
     })
     afterEach(async () => {
       if (server.isOnline) {
