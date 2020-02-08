@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/ajv-errors": "^1.0.2",
     "@types/bcrypt": "^3.0.0",
     "@types/jest": "^25.1.2",
     "@types/jsonwebtoken": "^8.3.7",
@@ -19,6 +20,7 @@
     "@types/pg": "^7.14.1",
     "@types/pino": "^5.15.5",
     "@types/qs": "^6.9.1",
+    "@typescript-eslint/eslint-plugin": "^2.19.0",
     "eslint": "^6.7.1",
     "eslint-config-standard": "^14.1.0",
     "eslint-plugin-import": "^2.18.2",
@@ -46,5 +48,8 @@
     "qs": "^6.9.1",
     "require-env": "^0.2.1",
     "uWebSockets.js": "git+https://github.com/uNetworking/uWebSockets.js.git#v17.1.0"
+  },
+  "engine": {
+    "node": "10.19.0"
   }
 }

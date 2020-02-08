@@ -1,6 +1,6 @@
 // @ts-nocheck
-import Lola from '../src/index'
-import Server from '../src/server'
+import Lola from '../src/index.ts'
+import Server from '../src/server.ts'
 import Konekto from 'konekto'
 const jwtConfig = {
   secret: 'xd'
