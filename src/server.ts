@@ -4,18 +4,20 @@ import qs from 'qs'
 import { onAborted, readBody, respond, TokenHelper, JwtConfig, validate } from './utils'
 import { RBAC } from 'fast-rbac'
 import Ajv, { ValidateFunction } from 'ajv'
+import pino from 'pino'
+
 
 interface ServerConfig {
-  konekto: any
-  jwtConfig: JwtConfig
-  rbacOptions: RBAC.Options
-  validations?: any
+  konekto: any;
+  jwtConfig: JwtConfig;
+  rbacOptions: RBAC.Options;
+  validations?: any;
 }
 
 export = class Server {
   private app: server.TemplatedApp
   private _socket: any
-  public isOnline: boolean = false
+  public isOnline = false
 
   constructor ({ konekto, jwtConfig, rbacOptions, validations }: ServerConfig) {
     let rbac: RBAC
@@ -36,8 +38,8 @@ export = class Server {
     }
     const app = server.App()
     const tokenHelper = new TokenHelper(jwtConfig, konekto)
-    const logger = require('pino')()
-    app.post('/signup', async (res, req) => {
+    const logger = pino()
+    app.post('/signup', async (res) => {
       onAborted(res)
       const user = await readBody(res)
       validate(validator, validations, 'users', user)
@@ -49,7 +51,7 @@ export = class Server {
       await tokenHelper.getToken(res, id)
     })
 
-    app.post('/signin', async (res, req) => {
+    app.post('/signin', async (res) => {
       onAborted(res)
       const payload = await readBody(res)
       const user = await konekto.findOneByQueryObject({
@@ -78,7 +80,7 @@ export = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const me = await konekto.findById(user._id, {
           hooks: {
-            beforeRead: (node: any) => {
+            beforeRead: (node: any): boolean => {
               if (!rbac.can('users', node._label, 'read', { user, node })) {
                 return false
               }
@@ -104,7 +106,7 @@ export = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const result = await konekto.save(body, {
           hooks: {
-            beforeSave: async (node: any) => {
+            beforeSave: async (node: any): Promise<boolean> => {
               validate(validator, validations, node._label, node)
 
               const nodeDb = await konekto.findOneByQueryObject({
@@ -121,7 +123,10 @@ export = class Server {
                 return false
               }
               if (node._id !== user._id) {
-                node.user_id = user._id
+                // commented out this, but, is this really necessary to be a database hook, or couldn't it be
+                // a normal function before the save one?
+                // eslint-disable-next-line require-atomic-updates
+                node['user_id'] = user._id
               }
               return true
             }
@@ -142,14 +147,14 @@ export = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const result = await konekto.findByQueryObject(qs.parse(query), {
           hooks: {
-            beforeParseNode (node: any) {
+            beforeParseNode (node: any): void {
               if (node._where) {
                 node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
               } else {
                 node._where = { filter: '{this}.deleted IS NULL' }
               }
             },
-            beforeRead: (node: any) => {
+            beforeRead: (node: any): boolean => {
               if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                 return false
               }
@@ -175,7 +180,7 @@ export = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const result = await konekto.findById(id, {
           hooks: {
-            beforeRead: (node: any) => {
+            beforeRead: (node: any): boolean => {
               if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                 return false
               }
@@ -204,7 +209,7 @@ export = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const result = await konekto.findByQueryObject(query, {
           hooks: {
-            beforeRead: (node: any) => {
+            beforeRead: (node: any): boolean => {
               if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                 throw new Error('unauthorized')
               }
@@ -217,7 +222,7 @@ export = class Server {
         })
         await konekto.save(result, {
           hooks: {
-            beforeSave (node: any) {
+            beforeSave (node: any): boolean {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -250,7 +255,7 @@ export = class Server {
           },
           {
             hooks: {
-              beforeRead: (node: any) => {
+              beforeRead: (node: any): boolean => {
                 if (!rbac.can('users', node._label, 'read', { user: user, node })) {
                   throw new Error('unauthorized')
                 }
@@ -264,7 +269,7 @@ export = class Server {
         )
         await konekto.save(result, {
           hooks: {
-            beforeSave (node: any) {
+            beforeSave (node: any): boolean {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -283,7 +288,7 @@ export = class Server {
     this.app = app
   }
 
-  async listen (hostname: string, port: number) {
+  async listen (hostname: string, port: number): Promise<void> {
     if (!hostname || typeof hostname !== 'string') {
       throw new Error('You must provide a hostname and it must be a string')
     }
@@ -303,7 +308,7 @@ export = class Server {
     })
   }
 
-  disconnect () {
+  disconnect (): void {
     server.us_listen_socket_close(this._socket)
   }
 }
