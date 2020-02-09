@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "type": "object",
+  "properties": {
+    "username": {
+      "type": "string",
+      "minLength": 2
+    },
+    "password": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "errorMessage": {
+    "type": "You must provide an user payload",
+    "properties": {
+      "username": "username must have at least 2 characters",
+      "password": "password must have at least one character"
+    },
+    "required": "username and password are required"
+  },
+  "required": ["username", "password"]
+}
