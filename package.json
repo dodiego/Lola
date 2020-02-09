@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node_modules/.bin/jest",
     "dev": "node_modules/.bin/nodemon --watch .env --watch src src/index.js | node_modules/.bin/pino-pretty",
-    "start": "NODE_ENV=production node src/index.js"
+    "start": "NODE_ENV=production node src/index.js",
+    "lint": "node_modules/.bin/eslint src/*.ts"
   },
   "keywords": [],
   "author": "",
