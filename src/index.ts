@@ -6,24 +6,44 @@ import Server from './server'
 //@ts-ignore
 import Konekto from 'konekto'
 
-export = class Lola {
-  konekto: any
-  server: any
-  _seeded = false
+interface LolaConfig {
+  jwtConfig: JwtConfig;
+  rbacOptions: RBAC.Options;
+  connectionConfig?: ConnectionConfig;
+  validations?: any;
+}
 
-  constructor (jwtConfig: JwtConfig, rbacOptions: RBAC.Options, connectionConfig: ConnectionConfig) {
+export = class Lola {
+  private konekto: any
+  private server: Server
+  private _seeded = false
+
+  constructor ({ jwtConfig, rbacOptions, connectionConfig, validations }: LolaConfig) {
     const konekto = new Konekto(connectionConfig)
-    const server = new Server({ konekto, rbacOptions, jwtConfig })
+    const server = new Server({ konekto, rbacOptions, jwtConfig, validations })
 
     this.konekto = konekto
     this.server = server
   }
+// {
+//   graphName,
+//     schema,
+//     seedFn = async function (_: any) { }
+// }: {
+//   graphName: string
+//   schema ?: any
+//   seedFn ?: (_: any) => Promise<void>
+//   }) {
 
-  async seed(graphName: string, schema: any, seedFn?: (konekto: any) => Promise<void>): Promise<void> {
+  async seed({graphName, schema, seedFn}: {graphName: string; schema: any; seedFn?: (_: any) => Promise<void>}): Promise<void> {
     if (!graphName || typeof graphName !== 'string') {
       throw new Error('graphName must be a string')
     }
-
+    if (!schema) {
+      schema = { _label: 'users' }
+    } else {
+      schema = [schema, { _label: 'users' }]
+    }
     await this.setup(graphName, schema)
 
     if (seedFn)
@@ -43,5 +63,9 @@ export = class Lola {
     [this.konekto.connect(), this.konekto.createGraph(graphName),
     this.konekto.setGraph(graphName), this.konekto.createSchema(schema)]
     .map(async promise => await promise)
+  }
+
+    stop(): void {
+    this.server.disconnect()
   }
 }

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import Server from '../src/server.ts'
+import Server from '../../src/server'
 import Konekto from 'konekto'
 const konekto = new Konekto()
 const jwtConfig = {

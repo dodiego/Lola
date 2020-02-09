@@ -1,25 +1,25 @@
 import server from 'uWebSockets.js'
 import bcrypt from 'bcrypt'
 import qs from 'qs'
-import { onAborted, readBody, respond, TokenHelper, JwtConfig } from './utils'
+import { onAborted, readBody, respond, TokenHelper, JwtConfig, validate } from './utils'
 import { RBAC } from 'fast-rbac'
-import { Logger } from 'pino'
+import Ajv, { ValidateFunction } from 'ajv'
 import pino from 'pino'
+
 
 interface ServerConfig {
   konekto: any;
   jwtConfig: JwtConfig;
   rbacOptions: RBAC.Options;
+  validations?: any;
 }
 
-export default class Server {
-  app: server.TemplatedApp
-  konekto: any
-  logger: Logger
-  _socket: any
-  isOnline = false
+export = class Server {
+  private app: server.TemplatedApp
+  private _socket: any
+  public isOnline = false
 
-  constructor ({ konekto, jwtConfig, rbacOptions }: ServerConfig) {
+  constructor ({ konekto, jwtConfig, rbacOptions, validations }: ServerConfig) {
     let rbac: RBAC
     if (!rbacOptions) {
       throw new Error('You must provide at least an empty object for RBAC')
@@ -31,13 +31,18 @@ export default class Server {
         }
       })
     }
+    let validator: ValidateFunction
+    if (validations) {
+      const ajv = new Ajv()
+      validator = ajv.compile(validations)
+    }
     const app = server.App()
     const tokenHelper = new TokenHelper(jwtConfig, konekto)
     const logger = pino()
     app.post('/signup', async (res) => {
       onAborted(res)
-
       const user = await readBody(res)
+      validate(validator, validations, 'users', user)
       const saltRounds = 10
       user.password = await bcrypt.hash(user.password, saltRounds)
       user._label = 'users'
@@ -102,6 +107,8 @@ export default class Server {
         const result = await konekto.save(body, {
           hooks: {
             beforeSave: async (node: any): Promise<boolean> => {
+              validate(validator, validations, node._label, node)
+
               const nodeDb = await konekto.findOneByQueryObject({
                 _label: node._label,
                 _where: { filter: '{this}._id = :id', params: { id: node._id } }
@@ -279,8 +286,6 @@ export default class Server {
     })
 
     this.app = app
-    this.konekto = konekto
-    this.logger = logger
   }
 
   async listen (hostname: string, port: number): Promise<void> {
@@ -301,7 +306,6 @@ export default class Server {
         }
       })
     })
-    this.logger.info('server started')
   }
 
   disconnect (): void {

@@ -2,7 +2,7 @@
 import Konekto from 'konekto'
 import jwt from 'jsonwebtoken'
 import { HttpResponse } from 'uWebSockets.js'
-import Ajv from 'ajv'
+import Ajv, { ValidateFunction } from 'ajv'
 import jwtSchema from '../json_schemas/jwt_config.json'
 import { promisify } from 'util'
 import ajvErrors from 'ajv-errors'
@@ -12,10 +12,12 @@ const jwtVerify = promisify(jwt.verify)
 const ajv = new Ajv({ allErrors: true, jsonPointers: true })
 ajvErrors(ajv)
 
-function validate (schema: any, object: any): void {
-  const result = ajv.validate(schema, object)
-  if (!result) {
-    throw new Error(ajv?.errors?.map(e => e.message).join('\n'))
+export function validate (validator: ValidateFunction, validations: any, label: string, json: any): void {
+  if (validations?.[label]) {
+    const result = validator(json)
+    if (!result) {
+      throw new Error(validator?.errors?.map(e => e.message).join('\n'))
+    }
   }
 }
 
@@ -73,7 +75,10 @@ export interface JwtConfig {
 
 export class TokenHelper {
   constructor (private _jwtConfig: JwtConfig, private _konekto: Konekto) {
-    validate(jwtSchema, _jwtConfig)
+    const result = ajv.validate(jwtSchema, _jwtConfig)
+    if (!result) {
+      throw new Error(ajv?.errors?.map(e => e.message).join('\n'))
+    }
     if (!(_konekto instanceof Konekto)) {
       throw new Error('You must provide a valid Konekto instance')
     }
