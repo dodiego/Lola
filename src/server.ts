@@ -3,8 +3,10 @@ import bcrypt from 'bcrypt'
 import qs from 'qs'
 import { onAborted, readBody, respond, TokenHelper, JwtConfig, validate } from './utils'
 import { RBAC } from 'fast-rbac'
-import Ajv, { ValidateFunction } from 'ajv'
-
+import basicUserSchema from '../json_schemas/basic_user.json'
+import Ajv from 'ajv'
+import pino from 'pino'
+const logger = pino()
 interface ServerConfig {
   konekto: any
   jwtConfig: JwtConfig
@@ -17,7 +19,7 @@ export = class Server {
   private _socket: any
   public isOnline: boolean = false
 
-  constructor ({ konekto, jwtConfig, rbacOptions, validations }: ServerConfig) {
+  constructor({ konekto, jwtConfig, rbacOptions, validations }: ServerConfig) {
     let rbac: RBAC
     if (!rbacOptions) {
       throw new Error('You must provide at least an empty object for RBAC')
@@ -29,23 +31,38 @@ export = class Server {
         }
       })
     }
-    let validator: ValidateFunction
+    const schemas: any[] = [basicUserSchema]
     if (validations) {
-      const ajv = new Ajv()
-      validator = ajv.compile(validations)
+      schemas.push(...Object.values(validations))
     }
+    const ajv = new Ajv({ schemas, allErrors: true, jsonPointers: true })
+    require('ajv-errors')(ajv)
     const app = server.App()
     const tokenHelper = new TokenHelper(jwtConfig, konekto)
-    const logger = require('pino')()
+
     app.post('/signup', async (res, req) => {
       onAborted(res)
       const user = await readBody(res)
-      validate(validator, validations, 'users', user)
+      try {
+        validate(ajv, basicUserSchema, user)
+      } catch (error) {
+        logger.error(error)
+        return respond(res.writeStatus('400'), {
+          message: error.message
+        })
+      }
       const saltRounds = 10
       user.password = await bcrypt.hash(user.password, saltRounds)
       user._label = 'users'
-      delete user.is_admin
-      const id = await konekto.save(user)
+      let id
+      try {
+        id = await konekto.save(user)
+      } catch (error) {
+        logger.error(error)
+        return respond(res.writeStatus('500'), {
+          message: "Coudn't create the user, please try again later"
+        })
+      }
       await tokenHelper.getToken(res, id)
     })
 
@@ -105,7 +122,7 @@ export = class Server {
         const result = await konekto.save(body, {
           hooks: {
             beforeSave: async (node: any) => {
-              validate(validator, validations, node._label, node)
+              validate(ajv, validations?.[node._label], node)
 
               const nodeDb = await konekto.findOneByQueryObject({
                 _label: node._label,
@@ -142,7 +159,7 @@ export = class Server {
         const user = await tokenHelper.authenticate(res, token)
         const result = await konekto.findByQueryObject(qs.parse(query), {
           hooks: {
-            beforeParseNode (node: any) {
+            beforeParseNode(node: any) {
               if (node._where) {
                 node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
               } else {
@@ -217,7 +234,7 @@ export = class Server {
         })
         await konekto.save(result, {
           hooks: {
-            beforeSave (node: any) {
+            beforeSave(node: any) {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -264,7 +281,7 @@ export = class Server {
         )
         await konekto.save(result, {
           hooks: {
-            beforeSave (node: any) {
+            beforeSave(node: any) {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -283,7 +300,7 @@ export = class Server {
     this.app = app
   }
 
-  async listen (hostname: string, port: number) {
+  async listen(hostname: string, port: number) {
     if (!hostname || typeof hostname !== 'string') {
       throw new Error('You must provide a hostname and it must be a string')
     }
@@ -303,7 +320,7 @@ export = class Server {
     })
   }
 
-  disconnect () {
+  disconnect() {
     server.us_listen_socket_close(this._socket)
   }
 }

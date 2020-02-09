@@ -10,9 +10,6 @@ describe('server', () => {
     test('Should instantiate with correct parameters', () => {
       expect(() => new Server({ konekto, jwtConfig, rbacOptions: {} })).not.toThrow()
     })
-    test('Should throw if konekto is not provided', () => {
-      expect(() => new Server({ jwtConfig, rbacOptions: {} })).toThrow('You must provide a valid Konekto instance')
-    })
     test('Should throw if jwtConfig is not provided', () => {
       expect(() => new Server({ konekto, rbacOptions: {} })).toThrow('You must provide jwtConfig')
     })

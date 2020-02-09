@@ -19,7 +19,7 @@ export = class Lola {
   private server: Server
   private _seeded: boolean = false
 
-  constructor ({ jwtConfig, rbacOptions, connectionConfig, validations }: LolaConfig) {
+  constructor({ jwtConfig, rbacOptions, connectionConfig, validations }: LolaConfig) {
     const konekto = new Konekto(connectionConfig)
     const server = new Server({ konekto, rbacOptions, jwtConfig, validations })
 
@@ -27,10 +27,10 @@ export = class Lola {
     this.server = server
   }
 
-  async seed ({
+  async seed({
     graphName,
     schema,
-    seedFn = async function (_: any) {}
+    seedFn = async function(_: any) {}
   }: {
     graphName: string
     schema?: any
@@ -52,14 +52,14 @@ export = class Lola {
     this._seeded = true
   }
 
-  async start (hostname: string, port: number) {
+  async start(hostname: string, port: number) {
     if (!this._seeded) {
       throw new Error('You need to seed the database before starting the server')
     }
     await this.server.listen(hostname, port)
   }
 
-  stop () {
+  stop() {
     this.server.disconnect()
   }
 }

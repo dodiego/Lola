@@ -2,35 +2,33 @@
 import Konekto from 'konekto'
 import jwt from 'jsonwebtoken'
 import { HttpResponse } from 'uWebSockets.js'
-import Ajv, { ValidateFunction } from 'ajv'
 import jwtSchema from '../json_schemas/jwt_config.json'
+import Ajv from 'ajv'
 const { promisify } = require('util')
 const jwtSign = promisify(jwt.sign)
 const jwtVerify = promisify(jwt.verify)
-const ajv = new Ajv({ allErrors: true, jsonPointers: true })
-require('ajv-errors')(ajv)
 
-export function validate (validator: ValidateFunction, validations: any, label: string, json: any) {
-  if (validations?.[label]) {
-    const result = validator(json)
+export function validate(validator: Ajv.Ajv, schema: any, json: any) {
+  if (schema) {
+    const result = validator.validate(schema, json)
     if (!result) {
       throw new Error(validator?.errors?.map(e => e.message).join('\n'))
     }
   }
 }
 
-export function onAborted (res: HttpResponse) {
+export function onAborted(res: HttpResponse) {
   res.onAborted(() => {
     res.aborted = true
   })
 }
-export function respond (res: HttpResponse, result?: object) {
+export function respond(res: HttpResponse, result?: object) {
   if (!res.aborted) {
     res.end(JSON.stringify(result))
   }
 }
 
-export function readBody (res: HttpResponse): Promise<any> {
+export function readBody(res: HttpResponse): Promise<any> {
   let buffer: Uint8Array
   return new Promise((resolve, reject) => {
     res.onData((ab, isLast) => {
@@ -72,17 +70,13 @@ export interface JwtConfig {
 }
 
 export class TokenHelper {
-  constructor (private _jwtConfig: JwtConfig, private _konekto: Konekto) {
-    const result = ajv.validate(jwtSchema, _jwtConfig)
-    if (!result) {
-      throw new Error(ajv?.errors?.map(e => e.message).join('\n'))
-    }
-    if (!(_konekto instanceof Konekto)) {
-      throw new Error('You must provide a valid Konekto instance')
-    }
+  constructor(private _jwtConfig: JwtConfig, private _konekto: Konekto) {
+    const ajv = new Ajv({ allErrors: true, jsonPointers: true })
+    require('ajv-errors')(ajv)
+    validate(ajv, jwtSchema, _jwtConfig)
   }
 
-  async getToken (res: HttpResponse, _id: string) {
+  async getToken(res: HttpResponse, _id: string) {
     let response
     try {
       const token = await jwtSign({ _id }, this._jwtConfig.secret, this._jwtConfig.options)
@@ -94,7 +88,7 @@ export class TokenHelper {
     respond(res, response)
   }
 
-  async getUserFromToken (token: string) {
+  async getUserFromToken(token: string) {
     const user: any = await jwtVerify(token, this._jwtConfig.secret)
     const userDb = await this._konekto.findOneByQueryObject({
       _label: 'users',
@@ -106,7 +100,7 @@ export class TokenHelper {
     return userDb
   }
 
-  async authenticate (res: HttpResponse, token: string) {
+  async authenticate(res: HttpResponse, token: string) {
     try {
       return await this.getUserFromToken(token)
     } catch (error) {
