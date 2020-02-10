@@ -15,6 +15,15 @@ function beforeRead (user: any, node: any, rbac: RBAC) {
   return true
 }
 
+function beforeDelete (user: any, node: any, rbac: RBAC) {
+  if (!beforeRead(user, node, rbac)) {
+    throw {
+      status: 403,
+      message: 'Unauthorized'
+    }
+  }
+}
+
 export = class Controller {
   private ajv: Ajv.Ajv
   constructor (private validations: any, private konekto: any, private logger: Logger, private rbac: RBAC) {
@@ -90,9 +99,7 @@ export = class Controller {
             _label: node._label,
             _where: { filter: '{this}._id = :id', params: { id: node._id } }
           })
-          if (node._label === 'users') {
-            delete node.is_admin
-          }
+
           if (nodeDb) {
             return this.rbac.can('users', node._label, 'update', { user, node })
           }
@@ -119,14 +126,23 @@ export = class Controller {
   async findByQueryObject (user: any, queryObject: any) {
     return this.konekto.findByQueryObject(queryObject, {
       hooks: {
-        beforeParseNode (node: any) {
-          if (node._where) {
-            node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
-          } else {
-            node._where = { filter: '{this}.deleted IS NULL' }
-          }
-        },
         beforeRead: (node: any) => beforeRead(user, node, this.rbac)
+      }
+    })
+  }
+
+  async deleteByQueryObject (user: any, queryObject: any) {
+    return this.konekto.deleteByQueryObject(queryObject, {
+      hooks: {
+        beforeRead: (node: any) => beforeDelete(user, node, this.rbac)
+      }
+    })
+  }
+
+  async deleteById (user: any, id: string) {
+    return this.konekto.deleteById(id, {
+      hooks: {
+        beforeRead: (node: any) => beforeDelete(user, node, this.rbac)
       }
     })
   }

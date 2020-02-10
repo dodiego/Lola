@@ -120,33 +120,10 @@ export = class Server {
     app.del('/api', async (res, req) => {
       onAborted(res)
       const token = req.getHeader('authorization')
-      const query = qs.parse(req.getQuery())
+      const query = req.getQuery()
       try {
         const user = await tokenHelper.authenticate(res, token)
-        const result = await konekto.findByQueryObject(query, {
-          hooks: {
-            beforeRead: (node: any) => {
-              if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-                throw new Error('unauthorized')
-              }
-              if (node._label === 'users') {
-                delete node.password
-              }
-              return true
-            }
-          }
-        })
-        await konekto.save(result, {
-          hooks: {
-            beforeSave (node: any) {
-              if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
-                return false
-              }
-              node.deleted = true
-              return true
-            }
-          }
-        })
+        const result = await controller.deleteByQueryObject(user, qs.parse(query))
         respond(res, result)
       } catch (error) {
         logger.error(error)
@@ -160,40 +137,7 @@ export = class Server {
       const id = req.getParameter(0)
       try {
         const user = await tokenHelper.authenticate(res, token)
-        const result = await konekto.findOneByQueryObject(
-          {
-            _where: {
-              filter: '{this}._id = :id',
-              params: {
-                id
-              }
-            }
-          },
-          {
-            hooks: {
-              beforeRead: (node: any) => {
-                if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-                  throw new Error('unauthorized')
-                }
-                if (node._label === 'users') {
-                  delete node.password
-                }
-                return true
-              }
-            }
-          }
-        )
-        await konekto.save(result, {
-          hooks: {
-            beforeSave (node: any) {
-              if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
-                return false
-              }
-              node.deleted = true
-              return true
-            }
-          }
-        })
+        const result = await controller.deleteById(user, id)
         respond(res, result)
       } catch (error) {
         logger.error(error)
