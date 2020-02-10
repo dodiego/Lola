@@ -1,17 +1,22 @@
-import server from 'uWebSockets.js'
+import server, { HttpResponse } from 'uWebSockets.js'
 import bcrypt from 'bcrypt'
 import qs from 'qs'
 import { onAborted, readBody, respond, TokenHelper, JwtConfig, validate } from './utils'
 import Controller from './controller'
 import { RBAC } from 'fast-rbac'
-import Ajv from 'ajv'
-import pino from 'pino'
-const logger = pino()
 interface ServerConfig {
   konekto: any
   jwtConfig: JwtConfig
   rbacOptions: RBAC.Options
   validations?: any
+}
+
+async function handleRequest (res: HttpResponse, handler: () => Promise<any>) {
+  try {
+    await handler()
+  } catch (error) {
+    respond(res.writeStatus(error.status), { message: error.message })
+  }
 }
 
 export = class Server {
@@ -36,113 +41,91 @@ export = class Server {
 
     const app = server.App()
     const tokenHelper = new TokenHelper(jwtConfig, konekto)
-    const controller = new Controller(validations, konekto, logger, rbac)
+    const controller = new Controller(validations, konekto, rbac)
     app.post('/signup', async (res, _req) => {
       onAborted(res)
       const payload = await readBody(res)
-      try {
+      await handleRequest(res, async () => {
         const _id = await controller.createUser(payload)
         await tokenHelper.getToken(res, _id)
-      } catch (error) {
-        respond(res.writeStatus(error.status), { message: error.message })
-      }
+      })
     })
 
     app.post('/signin', async (res, _req) => {
       onAborted(res)
       const payload = await readBody(res)
-      try {
+      await handleRequest(res, async () => {
         const user = await controller.findUser(payload)
         await tokenHelper.getToken(res, user._id)
-      } catch (error) {
-        respond(res.writeStatus(error.status), { message: error.message })
-      }
+      })
     })
 
     app.get('/me', async (res, req) => {
       onAborted(res)
       const token = req.getHeader('authorization')
-      try {
+      await handleRequest(res, async () => {
         const user = await tokenHelper.authenticate(res, token)
         const me = await controller.findById(user, user._id)
         respond(res, me)
-      } catch (error) {
-        logger.error(error)
-        respond(res.writeStatus('500'), { message: 'an error occurred' })
-      }
+      })
     })
 
     app.post('/api', async (res, req) => {
       onAborted(res)
       const token = req.getHeader('authorization')
-      try {
+      await handleRequest(res, async () => {
         const body = await readBody(res)
         const user = await tokenHelper.authenticate(res, token)
         const result = await controller.save(user, body)
         respond(res, result)
-      } catch (error) {
-        logger.error(error)
-        respond(res.writeStatus('403'), { message: 'You cannot perform this action' })
-      }
+      })
     })
 
     app.get('/api', async (res, req) => {
       onAborted(res)
       const token = req.getHeader('authorization')
       const query = req.getQuery()
-      try {
+      await handleRequest(res, async () => {
         const user = await tokenHelper.authenticate(res, token)
         const result = await controller.findByQueryObject(user, qs.parse(query))
         respond(res, result)
-      } catch (error) {
-        logger.error(error)
-        respond(res.writeStatus('500'), { message: 'an error has occurred, please try again' })
-      }
+      })
     })
 
     app.get('/api/id/:id', async (res, req) => {
       onAborted(res)
       const id = req.getParameter(0)
       const token = req.getHeader('authorization')
-      try {
+      await handleRequest(res, async () => {
         const user = await tokenHelper.authenticate(res, token)
         const result = await controller.findById(user, id)
         if (result) {
           return respond(res, result)
         }
         return respond(res, { message: 'root not found' })
-      } catch (error) {
-        logger.error(error)
-        respond(res, { message: 'Plase try again' })
-      }
+      })
     })
 
     app.del('/api', async (res, req) => {
       onAborted(res)
       const token = req.getHeader('authorization')
       const query = req.getQuery()
-      try {
+      await handleRequest(res, async () => {
         const user = await tokenHelper.authenticate(res, token)
         const result = await controller.deleteByQueryObject(user, qs.parse(query))
         respond(res, result)
-      } catch (error) {
-        logger.error(error)
-        respond(res, { message: 'please try again' })
-      }
+      })
     })
 
     app.del('/api/id/:id', async (res, req) => {
       onAborted(res)
       const token = req.getHeader('authorization')
       const id = req.getParameter(0)
-      try {
+      await handleRequest(res, async () => {
         const user = await tokenHelper.authenticate(res, token)
         const result = await controller.deleteById(user, id)
         respond(res, result)
-      } catch (error) {
-        logger.error(error)
-        respond(res, { message: 'please try again' })
-      }
+      })
     })
 
     this.app = app
