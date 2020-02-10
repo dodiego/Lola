@@ -6,10 +6,9 @@ import jwt from 'jsonwebtoken'
 
 jest.mock('konekto', () =>
   jest.fn().mockImplementation(() => ({
-    save: jest.fn().mockReturnValue('some_id')
+    save: jest.fn().mockReturnValue(new Promise(resolve => resolve('id')))
   }))
 )
-jest.mock('bcrypt')
 
 describe('lola - integration', () => {
   let lola: Lola
@@ -20,7 +19,6 @@ describe('lola - integration', () => {
     await lola.seed({ graphName: 'lola_integration_test' })
     await lola.start('localhost', 8080)
   })
-  beforeEach(() => konekto.deleteByQueryObject({}))
   afterAll(async () => {
     lola.stop()
   })

@@ -2,8 +2,8 @@ import server from 'uWebSockets.js'
 import bcrypt from 'bcrypt'
 import qs from 'qs'
 import { onAborted, readBody, respond, TokenHelper, JwtConfig, validate } from './utils'
+import Controller from './controller'
 import { RBAC } from 'fast-rbac'
-import basicUserSchema from '../json_schemas/basic_user.json'
 import Ajv from 'ajv'
 import pino from 'pino'
 const logger = pino()
@@ -19,7 +19,7 @@ export = class Server {
   private _socket: any
   public isOnline: boolean = false
 
-  constructor({ konekto, jwtConfig, rbacOptions, validations }: ServerConfig) {
+  constructor ({ konekto, jwtConfig, rbacOptions, validations }: ServerConfig) {
     let rbac: RBAC
     if (!rbacOptions) {
       throw new Error('You must provide at least an empty object for RBAC')
@@ -30,62 +30,33 @@ export = class Server {
           '*': { can: ['*'] }
         }
       })
+    } else {
+      rbac = new RBAC(rbacOptions)
     }
-    const schemas: any[] = [basicUserSchema]
-    if (validations) {
-      schemas.push(...Object.values(validations))
-    }
-    const ajv = new Ajv({ schemas, allErrors: true, jsonPointers: true })
-    require('ajv-errors')(ajv)
+
     const app = server.App()
     const tokenHelper = new TokenHelper(jwtConfig, konekto)
-
-    app.post('/signup', async (res, req) => {
-      onAborted(res)
-      const user = await readBody(res)
-      try {
-        validate(ajv, basicUserSchema, user)
-      } catch (error) {
-        logger.error(error)
-        return respond(res.writeStatus('400'), {
-          message: error.message
-        })
-      }
-      const saltRounds = 10
-      user.password = await bcrypt.hash(user.password, saltRounds)
-      user._label = 'users'
-      let id
-      try {
-        id = await konekto.save(user)
-      } catch (error) {
-        logger.error(error)
-        return respond(res.writeStatus('500'), {
-          message: "Coudn't create the user, please try again later"
-        })
-      }
-      await tokenHelper.getToken(res, id)
-    })
-
-    app.post('/signin', async (res, req) => {
+    const controller = new Controller(validations, konekto, logger, rbac)
+    app.post('/signup', async (res, _req) => {
       onAborted(res)
       const payload = await readBody(res)
-      const user = await konekto.findOneByQueryObject({
-        _label: 'users',
-        _where: {
-          filter: '{this}.username = :username',
-          params: {
-            username: payload.username
-          }
-        }
-      })
-      if (!user) {
-        return respond(res.writeStatus('404'))
+      try {
+        const _id = await controller.createUser(payload)
+        await tokenHelper.getToken(res, _id)
+      } catch (error) {
+        respond(res.writeStatus(error.status), { message: error.message })
       }
-      if (!(await bcrypt.compare(payload.password, user.password))) {
-        return respond(res.writeStatus('400'))
+    })
+
+    app.post('/signin', async (res, _req) => {
+      onAborted(res)
+      const payload = await readBody(res)
+      try {
+        const user = await controller.findUser(payload)
+        await tokenHelper.getToken(res, user._id)
+      } catch (error) {
+        respond(res.writeStatus(error.status), { message: error.message })
       }
-      delete user.password
-      await tokenHelper.getToken(res, user._id)
     })
 
     app.get('/me', async (res, req) => {
@@ -93,19 +64,7 @@ export = class Server {
       const token = req.getHeader('authorization')
       try {
         const user = await tokenHelper.authenticate(res, token)
-        const me = await konekto.findById(user._id, {
-          hooks: {
-            beforeRead: (node: any) => {
-              if (!rbac.can('users', node._label, 'read', { user, node })) {
-                return false
-              }
-              if (node._label === 'users') {
-                delete node.password
-              }
-              return true
-            }
-          }
-        })
+        const me = await controller.findById(user, user._id)
         respond(res, me)
       } catch (error) {
         logger.error(error)
@@ -119,31 +78,7 @@ export = class Server {
       try {
         const body = await readBody(res)
         const user = await tokenHelper.authenticate(res, token)
-        const result = await konekto.save(body, {
-          hooks: {
-            beforeSave: async (node: any) => {
-              validate(ajv, validations?.[node._label], node)
-
-              const nodeDb = await konekto.findOneByQueryObject({
-                _label: node._label,
-                _where: { filter: '{this}._id = :id', params: { id: node._id } }
-              })
-              if (node._label === 'users') {
-                delete node.is_admin
-              }
-              if (nodeDb) {
-                return rbac.can('users', node._label, 'update', { user, node })
-              }
-              if (!rbac.can('users', node._label, 'create', { user, node })) {
-                return false
-              }
-              if (node._id !== user._id) {
-                node.user_id = user._id
-              }
-              return true
-            }
-          }
-        })
+        const result = await controller.save(user, body)
         respond(res, result)
       } catch (error) {
         logger.error(error)
@@ -157,26 +92,7 @@ export = class Server {
       const query = req.getQuery()
       try {
         const user = await tokenHelper.authenticate(res, token)
-        const result = await konekto.findByQueryObject(qs.parse(query), {
-          hooks: {
-            beforeParseNode(node: any) {
-              if (node._where) {
-                node._where.filter = `({this}.deleted IS NULL) AND (${node._where})`
-              } else {
-                node._where = { filter: '{this}.deleted IS NULL' }
-              }
-            },
-            beforeRead: (node: any) => {
-              if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-                return false
-              }
-              if (node._label === 'users') {
-                delete node.password
-              }
-              return true
-            }
-          }
-        })
+        const result = await controller.findByQueryObject(user, qs.parse(query))
         respond(res, result)
       } catch (error) {
         logger.error(error)
@@ -190,19 +106,7 @@ export = class Server {
       const token = req.getHeader('authorization')
       try {
         const user = await tokenHelper.authenticate(res, token)
-        const result = await konekto.findById(id, {
-          hooks: {
-            beforeRead: (node: any) => {
-              if (!rbac.can('users', node._label, 'read', { user: user, node })) {
-                return false
-              }
-              if (node._label === 'users') {
-                delete node.password
-              }
-              return true
-            }
-          }
-        })
+        const result = await controller.findById(user, id)
         if (result) {
           return respond(res, result)
         }
@@ -234,7 +138,7 @@ export = class Server {
         })
         await konekto.save(result, {
           hooks: {
-            beforeSave(node: any) {
+            beforeSave (node: any) {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -281,7 +185,7 @@ export = class Server {
         )
         await konekto.save(result, {
           hooks: {
-            beforeSave(node: any) {
+            beforeSave (node: any) {
               if (!rbac.can('users', node._label, 'delete', { user: user, node })) {
                 return false
               }
@@ -300,7 +204,7 @@ export = class Server {
     this.app = app
   }
 
-  async listen(hostname: string, port: number) {
+  async listen (hostname: string, port: number) {
     if (!hostname || typeof hostname !== 'string') {
       throw new Error('You must provide a hostname and it must be a string')
     }
@@ -320,7 +224,7 @@ export = class Server {
     })
   }
 
-  disconnect() {
+  disconnect () {
     server.us_listen_socket_close(this._socket)
   }
 }
