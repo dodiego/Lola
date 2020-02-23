@@ -1,5 +1,5 @@
 import { validate } from './utils'
-import bcrypt from 'bcrypt'
+import argon from 'argon2'
 import basicUserSchema from '../json_schemas/basic_user.json'
 import Ajv from 'ajv'
 import pino, { Logger } from 'pino'
@@ -63,8 +63,7 @@ export = class Controller {
         message: error.message
       }
     }
-    const saltRounds = 10
-    user.password = await bcrypt.hash(user.password, saltRounds)
+    user.password = await argon.hash(user.password)
     user._label = 'users'
     try {
       return await this.konekto.save(user)
@@ -94,7 +93,7 @@ export = class Controller {
         message: 'User not found'
       }
     }
-    if (!(await bcrypt.compare(payload.password, user.password))) {
+    if (!(await argon.verify(payload.password, user.password))) {
       throw {
         status: 400,
         message: 'invalid password'
