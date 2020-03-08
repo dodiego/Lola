@@ -4,9 +4,10 @@ const Konekto = require('konekto')
 module.exports = class Lola {
   /**
    *
-   * @param {import('./index').LolaConfig} config
+   * @param {import('../index').LolaConfig} config
    */
   constructor ({ jwtConfig, rbacOptions, connectionConfig, validations }) {
+    // @ts-ignore
     const konekto = new Konekto(connectionConfig)
     const server = new Server({ konekto, rbacOptions, jwtConfig, validations })
 
@@ -14,7 +15,7 @@ module.exports = class Lola {
     this.server = server
   }
 
-  async seed ({ graphName, schema, seedFn = async function () {} }) {
+  async seed ({ graphName, schema, seedFn = async function (_konekto) {} }) {
     if (!graphName || typeof graphName !== 'string') {
       throw new Error('graphName must be a string')
     }

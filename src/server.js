@@ -15,7 +15,7 @@ async function handleRequest (res, handler) {
 module.exports = class Server {
   /**
    *
-   * @param {import('./index').ServerConfig } config
+   * @param {import('../index').ServerConfig } config
    */
   constructor ({ konekto, jwtConfig, rbacOptions, validations }) {
     const app = server.App()

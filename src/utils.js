@@ -36,6 +36,7 @@ function readBody (res) {
         let json
         if (buffer) {
           try {
+            // @ts-ignore
             json = JSON.parse(Buffer.concat([buffer, chunk]))
           } catch (e) {
             res.close()
@@ -45,6 +46,7 @@ function readBody (res) {
           resolve(json)
         } else {
           try {
+            // @ts-ignore
             json = JSON.parse(chunk)
           } catch (e) {
             res.close()
@@ -66,7 +68,7 @@ function readBody (res) {
 class TokenHelper {
   /**
    *
-   * @param {import('./index').JwtConfig} _jwtConfig
+   * @param {import('../index').JwtConfig} _jwtConfig
    * @param {any} _konekto
    */
   constructor (_jwtConfig, _konekto) {
@@ -80,6 +82,7 @@ class TokenHelper {
   async getToken (res, _id) {
     let response
     try {
+      // @ts-ignore
       const token = await jwtSign({ _id }, this._jwtConfig.secret, this._jwtConfig.options)
       response = { token }
     } catch (error) {
@@ -90,6 +93,7 @@ class TokenHelper {
   }
 
   async getUserFromToken (token) {
+    // @ts-ignore
     const user = await jwtVerify(token, this._jwtConfig.secret)
     const userDb = await this._konekto.findOneByQueryObject({
       _label: 'users',

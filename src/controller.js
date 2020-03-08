@@ -2,6 +2,7 @@ const { validate } = require('./utils')
 const argon = require('argon2')
 const basicUserSchema = require('../json_schemas/basic_user.json')
 const Ajv = require('ajv')
+const pino = require('pino')
 const { RBAC } = require('fast-rbac')
 
 class HttpError extends Error {
@@ -9,6 +10,26 @@ class HttpError extends Error {
     super(message)
     this.status = status
   }
+}
+
+async function beforeSave (user, node, rbac) {
+  validate(this.ajv, this.validations && this.validations[node._label], node)
+
+  const nodeDb = await this.konekto.findOneByQueryObject({
+    _label: node._label,
+    _where: { filter: '{this}._id = :id', params: { id: node._id } }
+  })
+
+  if (nodeDb) {
+    return this.rbac.can('users', node._label, 'update', { user, node })
+  }
+  if (!this.rbac.can('users', node._label, 'create', { user, node })) {
+    return false
+  }
+  if (node._id !== user._id) {
+    node.user_id = user._id
+  }
+  return true
 }
 
 function beforeRead (user, node, rbac) {
@@ -64,6 +85,7 @@ module.exports = class Controller {
     require('ajv-errors')(ajv)
     this.ajv = ajv
     this.konekto = konekto
+    this.logger = pino()
     if (!Object.keys(rbacOptions).length) {
       this.rbac = new RBAC({
         roles: {
@@ -85,7 +107,11 @@ module.exports = class Controller {
     user.password = await argon.hash(user.password)
     user._label = 'users'
     try {
-      return await this.konekto.save(user)
+      return await this.konekto.save(user, {
+        hooks: {
+          beforeSave: node => beforeSave(user, node, this.rbac)
+        }
+      })
     } catch (error) {
       this.logger.error(error)
       throw new HttpError("Coudn't create the user, please try again later", 500)
@@ -118,25 +144,7 @@ module.exports = class Controller {
     try {
       return await this.konekto.save(payload, {
         hooks: {
-          beforeSave: async node => {
-            validate(this.ajv, this.validations && this.validations[node._label], node)
-
-            const nodeDb = await this.konekto.findOneByQueryObject({
-              _label: node._label,
-              _where: { filter: '{this}._id = :id', params: { id: node._id } }
-            })
-
-            if (nodeDb) {
-              return this.rbac.can('users', node._label, 'update', { user, node })
-            }
-            if (!this.rbac.can('users', node._label, 'create', { user, node })) {
-              return false
-            }
-            if (node._id !== user._id) {
-              node.user_id = user._id
-            }
-            return true
-          }
+          beforeSave: node => beforeSave(user, node, this.rbac)
         }
       })
     } catch (error) {
